@@ -31,14 +31,16 @@ import org.apache.flink.runtime.checkpoint.CheckpointsCleaner;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
 import org.apache.flink.runtime.checkpoint.MasterTriggerRestoreHook;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
-import org.apache.flink.runtime.executiongraph.failover.flip1.ResultPartitionAvailabilityChecker;
+import org.apache.flink.runtime.executiongraph.failover.ResultPartitionAvailabilityChecker;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
+import org.apache.flink.runtime.metrics.groups.JobManagerJobMetricGroup;
 import org.apache.flink.runtime.query.KvStateLocationRegistry;
 import org.apache.flink.runtime.scheduler.InternalFailuresListener;
+import org.apache.flink.runtime.scheduler.VertexParallelismStore;
 import org.apache.flink.runtime.scheduler.strategy.SchedulingTopology;
 import org.apache.flink.runtime.state.CheckpointStorage;
 import org.apache.flink.runtime.state.StateBackend;
@@ -151,7 +153,9 @@ public interface ExecutionGraph extends AccessExecutionGraph {
 
     void setInternalTaskFailuresListener(InternalFailuresListener internalTaskFailuresListener);
 
-    void attachJobGraph(List<JobVertex> topologicallySorted) throws JobException;
+    void attachJobGraph(
+            List<JobVertex> topologicallySorted, JobManagerJobMetricGroup jobManagerJobMetricGroup)
+            throws JobException;
 
     void transitionToRunning();
 
@@ -244,6 +248,23 @@ public interface ExecutionGraph extends AccessExecutionGraph {
      * @param vertices The execution job vertices that are newly initialized.
      */
     void notifyNewlyInitializedJobVertices(List<ExecutionJobVertex> vertices);
+
+    /**
+     * Adds new job vertices to the execution graph based on the provided list of topologically
+     * sorted job vertices.
+     *
+     * @param topologicallySortedNewlyJobVertices a list of job vertices that are to be added,
+     *     defined in topological order.
+     * @param jobManagerJobMetricGroup the metric group associated with the job manager for
+     *     monitoring and metrics collection.
+     * @param newVerticesParallelismStore a store that maintains parallelism information for the
+     *     newly added job vertices.
+     */
+    void addNewJobVertices(
+            List<JobVertex> topologicallySortedNewlyJobVertices,
+            JobManagerJobMetricGroup jobManagerJobMetricGroup,
+            VertexParallelismStore newVerticesParallelismStore)
+            throws JobException;
 
     Optional<String> findVertexWithAttempt(final ExecutionAttemptID attemptId);
 

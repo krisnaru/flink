@@ -23,15 +23,15 @@ import org.apache.flink.util.InstantiationUtil;
 import com.amazonaws.auth.BasicSessionCredentials;
 import com.amazonaws.services.securitytoken.model.Credentials;
 import org.apache.hadoop.fs.s3a.auth.NoAwsCredentialsException;
-import org.junit.Test;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link DynamicTemporaryAWSCredentialsProvider}. */
-public class DynamicTemporaryAWSCredentialsProviderTest {
+class DynamicTemporaryAWSCredentialsProviderTest {
 
     private static final String ACCESS_KEY_ID = "testAccessKeyId";
     private static final String SECRET_ACCESS_KEY = "testSecretAccessKey";
@@ -39,35 +39,42 @@ public class DynamicTemporaryAWSCredentialsProviderTest {
 
     @BeforeEach
     void beforeEach() {
-        S3DelegationTokenReceiver.credentials = null;
+        AbstractS3DelegationTokenReceiver.credentials = null;
     }
 
     @AfterEach
     void afterEach() {
-        S3DelegationTokenReceiver.credentials = null;
+        AbstractS3DelegationTokenReceiver.credentials = null;
     }
 
     @Test
-    public void getCredentialsShouldThrowExceptionWhenNoCredentials() {
+    void getCredentialsShouldThrowExceptionWhenNoCredentials() {
         DynamicTemporaryAWSCredentialsProvider provider =
                 new DynamicTemporaryAWSCredentialsProvider();
 
-        assertThrows(NoAwsCredentialsException.class, provider::getCredentials);
+        assertThatThrownBy(provider::getCredentials).isInstanceOf(NoAwsCredentialsException.class);
     }
 
     @Test
-    public void getCredentialsShouldStoreCredentialsWhenCredentialsProvided() throws Exception {
+    void getCredentialsShouldStoreCredentialsWhenCredentialsProvided() throws Exception {
         DynamicTemporaryAWSCredentialsProvider provider =
                 new DynamicTemporaryAWSCredentialsProvider();
         Credentials credentials =
                 new Credentials(ACCESS_KEY_ID, SECRET_ACCESS_KEY, SESSION_TOKEN, null);
-        S3DelegationTokenReceiver receiver = new S3DelegationTokenReceiver();
+        AbstractS3DelegationTokenReceiver receiver =
+                new AbstractS3DelegationTokenReceiver() {
+                    @Override
+                    public String serviceName() {
+                        return "s3";
+                    }
+                };
 
         receiver.onNewTokensObtained(InstantiationUtil.serializeObject(credentials));
         BasicSessionCredentials returnedCredentials =
                 (BasicSessionCredentials) provider.getCredentials();
-        assertEquals(returnedCredentials.getAWSAccessKeyId(), credentials.getAccessKeyId());
-        assertEquals(returnedCredentials.getAWSSecretKey(), credentials.getSecretAccessKey());
-        assertEquals(returnedCredentials.getSessionToken(), credentials.getSessionToken());
+        assertThat(returnedCredentials.getAWSAccessKeyId()).isEqualTo(credentials.getAccessKeyId());
+        assertThat(returnedCredentials.getAWSSecretKey())
+                .isEqualTo(credentials.getSecretAccessKey());
+        assertThat(returnedCredentials.getSessionToken()).isEqualTo(credentials.getSessionToken());
     }
 }

@@ -377,7 +377,7 @@ public class FraudDetector extends KeyedProcessFunction<Long, Transaction, Alert
     private transient ValueState<Boolean> flagState;
 
     @Override
-    public void open(Configuration parameters) {
+    public void open(OpenContext openContext) {
         ValueStateDescriptor<Boolean> flagDescriptor = new ValueStateDescriptor<>(
                 "flag",
                 Types.BOOLEAN);
@@ -463,7 +463,7 @@ private transient ValueState<Boolean> flagState;
 private transient ValueState<Long> timerState;
 
 @Override
-public void open(Configuration parameters) {
+public void open(OpenContext openContext) {
     ValueStateDescriptor<Boolean> flagDescriptor = new ValueStateDescriptor<>(
             "flag",
             Types.BOOLEAN);
@@ -546,10 +546,10 @@ private void cleanUp(Context ctx) throws Exception {
 ```java
 package spendreport;
 
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.walkthrough.common.entity.Alert;
@@ -567,7 +567,7 @@ public class FraudDetector extends KeyedProcessFunction<Long, Transaction, Alert
     private transient ValueState<Long> timerState;
 
     @Override
-    public void open(Configuration parameters) {
+    public void open(OpenContext openContext) {
         ValueStateDescriptor<Boolean> flagDescriptor = new ValueStateDescriptor<>(
                 "flag",
                 Types.BOOLEAN);

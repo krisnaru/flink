@@ -72,6 +72,11 @@ function run_test() {
         set_config_key "execution.batch.speculative.block-slow-node-duration" "0s"
         set_config_key "slow-task-detector.execution-time.baseline-ratio" "0.0"
         set_config_key "slow-task-detector.execution-time.baseline-lower-bound" "0s"
+        set_config_key "table.optimizer.adaptive-broadcast-join.strategy" "auto"
+        set_config_key "table.optimizer.join.broadcast-threshold" "10485760L"
+        set_config_key "table.optimizer.skewed-join-optimization.strategy" "auto"
+        set_config_key "table.optimizer.skewed-join-optimization.skewed-threshold" "100kb"
+        set_config_key "table.optimizer.skewed-join-optimization.skewed-factor" "1.0"
     else
         echo "ERROR: Scheduler ${scheduler} is unsupported for tpcds test. Aborting..."
         exit 1
@@ -120,6 +125,12 @@ function check_logs_for_exceptions_for_adaptive_batch_scheduler {
     internal_check_logs_for_exceptions "${additional_allowed_exceptions[@]}"
 }
 
+function check_logs_for_errors_for_adaptive_batch_scheduler {
+    local additional_allowed_errors=("The handler of the request-complete-callback threw an exception: java.nio.channels.ClosedChannelException")
+
+    internal_check_logs_for_errors "${additional_allowed_errors[@]}"
+}
+
 SCHEDULER="${1:-Default}"
 ACTION="${2:-run_test}"
 
@@ -131,7 +142,7 @@ elif [ "${ACTION}" == "check_exceptions" ]; then
         exit 1
     fi
 
-    check_logs_for_errors
+    check_logs_for_errors_for_adaptive_batch_scheduler
     check_logs_for_exceptions_for_adaptive_batch_scheduler
     check_logs_for_non_empty_out_files
 else

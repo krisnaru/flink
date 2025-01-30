@@ -71,7 +71,6 @@ public final class ResolvedCatalogTable
      * symmetric. The framework will resolve functions and perform other validation tasks. A catalog
      * implementation must not deal with this during a read operation.
      */
-    @Override
     public Map<String, String> toProperties() {
         return CatalogPropertiesUtil.serializeCatalogTable(this);
     }
@@ -118,6 +117,16 @@ public final class ResolvedCatalogTable
     @Override
     public List<String> getPartitionKeys() {
         return origin.getPartitionKeys();
+    }
+
+    @Override
+    public Optional<Long> getSnapshot() {
+        return origin.getSnapshot();
+    }
+
+    @Override
+    public Optional<TableDistribution> getDistribution() {
+        return origin.getDistribution();
     }
 
     @Override

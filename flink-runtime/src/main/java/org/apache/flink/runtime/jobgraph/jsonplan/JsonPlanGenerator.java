@@ -26,6 +26,9 @@ import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.scheduler.adaptive.allocator.VertexParallelism;
+import org.apache.flink.streaming.api.graph.StreamEdge;
+import org.apache.flink.streaming.api.graph.StreamGraph;
+import org.apache.flink.streaming.api.graph.StreamNode;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonFactory;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
@@ -33,7 +36,6 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator
 import org.apache.commons.text.StringEscapeUtils;
 
 import java.io.StringWriter;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -42,18 +44,6 @@ public class JsonPlanGenerator {
 
     private static final String NOT_SET = "";
     private static final String EMPTY = "{}";
-    private static final VertexParallelism EMPTY_VERTEX_PARALLELISM =
-            new VertexParallelism() {
-                @Override
-                public Map<JobVertexID, Integer> getMaxParallelismForVertices() {
-                    return Collections.emptyMap();
-                }
-
-                @Override
-                public int getParallelism(JobVertexID jobVertexId) {
-                    return -1;
-                }
-            };
 
     public static String generatePlan(JobGraph jg) {
         return generatePlan(
@@ -61,7 +51,7 @@ public class JsonPlanGenerator {
                 jg.getName(),
                 jg.getJobType(),
                 jg.getVertices(),
-                EMPTY_VERTEX_PARALLELISM);
+                VertexParallelism.empty());
     }
 
     public static String generatePlan(
@@ -116,11 +106,12 @@ public class JsonPlanGenerator {
 
                 // write the core properties
                 JobVertexID vertexID = vertex.getID();
-                int storeParallelism = vertexParallelism.getParallelism(vertexID);
                 gen.writeStringField("id", vertexID.toString());
                 gen.writeNumberField(
                         "parallelism",
-                        storeParallelism != -1 ? storeParallelism : vertex.getParallelism());
+                        vertexParallelism
+                                .getParallelismOptional(vertexID)
+                                .orElse(vertex.getParallelism()));
                 gen.writeStringField("operator", operator);
                 gen.writeStringField("operator_strategy", operatorDescr);
                 gen.writeStringField("description", description);
@@ -181,6 +172,56 @@ public class JsonPlanGenerator {
             return writer.toString();
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate plan", e);
+        }
+    }
+
+    public static String generateStreamGraphJson(
+            StreamGraph sg, Map<Integer, JobVertexID> jobVertexIdMap) {
+        try (final StringWriter writer = new StringWriter(1024)) {
+            try (final JsonGenerator gen = new JsonFactory().createGenerator(writer)) {
+                // start of everything
+                gen.writeStartObject();
+
+                gen.writeArrayFieldStart("nodes");
+
+                // info per vertex
+                for (StreamNode node : sg.getStreamNodes()) {
+                    gen.writeStartObject();
+                    gen.writeStringField("id", String.valueOf(node.getId()));
+                    gen.writeNumberField("parallelism", node.getParallelism());
+                    gen.writeStringField("operator", node.getOperatorName());
+                    gen.writeStringField("description", node.getOperatorDescription());
+                    if (jobVertexIdMap.containsKey(node.getId())) {
+                        gen.writeStringField(
+                                "job_vertex_id", jobVertexIdMap.get(node.getId()).toString());
+                    }
+
+                    // write the input edge properties
+                    gen.writeArrayFieldStart("inputs");
+
+                    List<StreamEdge> inEdges = node.getInEdges();
+                    for (int inputNum = 0; inputNum < inEdges.size(); inputNum++) {
+                        StreamEdge edge = inEdges.get(inputNum);
+                        gen.writeStartObject();
+                        gen.writeNumberField("num", inputNum);
+                        gen.writeStringField("id", String.valueOf(edge.getSourceId()));
+                        gen.writeStringField("ship_strategy", edge.getPartitioner().toString());
+                        gen.writeStringField("exchange", edge.getExchangeMode().name());
+                        gen.writeEndObject();
+                    }
+
+                    gen.writeEndArray();
+
+                    gen.writeEndObject();
+                }
+
+                // end of everything
+                gen.writeEndArray();
+                gen.writeEndObject();
+            }
+            return writer.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to generate json stream plan", e);
         }
     }
 }

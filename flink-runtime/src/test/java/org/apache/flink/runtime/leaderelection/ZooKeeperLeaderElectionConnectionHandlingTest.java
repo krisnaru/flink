@@ -36,6 +36,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,8 +45,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Test behaviors of {@link ZooKeeperLeaderElectionDriver} when losing the connection to ZooKeeper.
  */
 class ZooKeeperLeaderElectionConnectionHandlingTest {
-
-    private static final String PATH = "/path";
 
     @RegisterExtension
     private static final EachCallbackWrapper<ZooKeeperExtension> zooKeeperResource =
@@ -90,8 +89,10 @@ class ZooKeeperLeaderElectionConnectionHandlingTest {
     @Test
     void testLoseLeadershipOnLostConnectionIfTolerateSuspendedConnectionsIsEnabled()
             throws Exception {
-        configuration.set(HighAvailabilityOptions.ZOOKEEPER_SESSION_TIMEOUT, 1000);
-        configuration.set(HighAvailabilityOptions.ZOOKEEPER_CONNECTION_TIMEOUT, 1000);
+        configuration.set(
+                HighAvailabilityOptions.ZOOKEEPER_SESSION_TIMEOUT, Duration.ofMillis(1000));
+        configuration.set(
+                HighAvailabilityOptions.ZOOKEEPER_CONNECTION_TIMEOUT, Duration.ofMillis(1000));
         configuration.set(HighAvailabilityOptions.ZOOKEEPER_TOLERATE_SUSPENDED_CONNECTIONS, true);
         runTestWithLostZooKeeperConnection(
                 configuration,
@@ -136,17 +137,20 @@ class ZooKeeperLeaderElectionConnectionHandlingTest {
                         testingFatalErrorHandlerResource.getTestingFatalErrorHandler());
         CuratorFramework client = curatorFrameworkWrapper.asCuratorFramework();
         LeaderElectionDriverFactory leaderElectionDriverFactory =
-                new ZooKeeperLeaderElectionDriverFactory(client, PATH);
+                new ZooKeeperLeaderElectionDriverFactory(client);
         DefaultLeaderElectionService leaderElectionService =
-                new DefaultLeaderElectionService(leaderElectionDriverFactory);
+                new DefaultLeaderElectionService(
+                        leaderElectionDriverFactory,
+                        testingFatalErrorHandlerResource.getTestingFatalErrorHandler());
 
-        try {
-            final TestingConnectionStateListener connectionStateListener =
-                    new TestingConnectionStateListener();
-            client.getConnectionStateListenable().addListener(connectionStateListener);
+        final TestingConnectionStateListener connectionStateListener =
+                new TestingConnectionStateListener();
+        client.getConnectionStateListenable().addListener(connectionStateListener);
 
-            final TestingContender contender = new TestingContender();
-            leaderElectionService.start(contender);
+        final TestingContender contender = new TestingContender();
+        try (LeaderElection leaderElection =
+                leaderElectionService.createLeaderElection("random-component-id")) {
+            leaderElection.startLeaderElection(contender);
 
             contender.awaitGrantLeadership();
 
@@ -164,7 +168,7 @@ class ZooKeeperLeaderElectionConnectionHandlingTest {
 
             validationLogic.accept(connectionStateListener, contender);
         } finally {
-            leaderElectionService.stop();
+            leaderElectionService.close();
             curatorFrameworkWrapper.close();
 
             if (problem == Problem.LOST_CONNECTION) {

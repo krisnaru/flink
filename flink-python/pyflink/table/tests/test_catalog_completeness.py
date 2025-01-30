@@ -44,8 +44,7 @@ class CatalogAPICompletenessTests(PythonAPICompletenessTestCase, PyFlinkTestCase
             'getFactory',
             'getTableFactory',
             'getFunctionDefinitionFactory',
-            'listPartitionsByFilter',
-            'supportsManagedTable'}
+            'listPartitionsByFilter'}
 
 
 class CatalogDatabaseAPICompletenessTests(PythonAPICompletenessTestCase, PyFlinkTestCase):
@@ -79,7 +78,7 @@ class CatalogBaseTableAPICompletenessTests(PythonAPICompletenessTestCase, PyFlin
 
     @classmethod
     def excluded_methods(cls):
-        return {'getUnresolvedSchema', 'getTableKind'}
+        return {'getUnresolvedSchema', 'getTableKind', 'getSchema'}
 
 
 class CatalogFunctionAPICompletenessTests(PythonAPICompletenessTestCase, PyFlinkTestCase):

@@ -19,17 +19,19 @@
 package org.apache.flink.table.planner.plan.batch.sql;
 
 import org.apache.flink.table.api.ExplainDetail;
+import org.apache.flink.table.api.SqlParserException;
 import org.apache.flink.table.api.TableConfig;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.connector.sink.abilities.SupportsRowLevelUpdate;
 import org.apache.flink.table.planner.utils.BatchTableTestUtil;
 import org.apache.flink.table.planner.utils.JavaScalaConversionUtil;
 import org.apache.flink.table.planner.utils.TableTestBase;
+import org.apache.flink.testutils.junit.extensions.parameterized.ParameterizedTestExtension;
+import org.apache.flink.testutils.junit.extensions.parameterized.Parameters;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestTemplate;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -37,9 +39,11 @@ import java.util.Collections;
 
 import scala.collection.Seq;
 
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+
 /** Test for row-level update. */
-@RunWith(Parameterized.class)
-public class RowLevelUpdateTest extends TableTestBase {
+@ExtendWith(ParameterizedTestExtension.class)
+class RowLevelUpdateTest extends TableTestBase {
 
     private final Seq<ExplainDetail> explainDetails =
             JavaScalaConversionUtil.toScala(
@@ -48,19 +52,19 @@ public class RowLevelUpdateTest extends TableTestBase {
 
     private BatchTableTestUtil util;
 
-    @Parameterized.Parameters(name = "updateMode = {0}")
-    public static Collection<SupportsRowLevelUpdate.RowLevelUpdateMode> data() {
+    @Parameters(name = "updateMode = {0}")
+    private static Collection<SupportsRowLevelUpdate.RowLevelUpdateMode> data() {
         return Arrays.asList(
                 SupportsRowLevelUpdate.RowLevelUpdateMode.UPDATED_ROWS,
                 SupportsRowLevelUpdate.RowLevelUpdateMode.ALL_ROWS);
     }
 
-    public RowLevelUpdateTest(SupportsRowLevelUpdate.RowLevelUpdateMode updateMode) {
+    RowLevelUpdateTest(SupportsRowLevelUpdate.RowLevelUpdateMode updateMode) {
         this.updateMode = updateMode;
     }
 
-    @Before
-    public void before() {
+    @BeforeEach
+    void before() {
         util = batchTestUtil(TableConfig.getDefault());
         util.tableEnv()
                 .getConfig()
@@ -68,21 +72,21 @@ public class RowLevelUpdateTest extends TableTestBase {
                 .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 12);
     }
 
-    @Test
-    public void testUpdateWithoutFilter() {
+    @TestTemplate
+    void testUpdateWithoutFilter() {
         createTableForUpdate();
         util.verifyExplainInsert("UPDATE t SET b = 'n1', a = char_length(b) * a ", explainDetails);
     }
 
-    @Test
-    public void testUpdateWithFilter() {
+    @TestTemplate
+    void testUpdateWithFilter() {
         createTableForUpdate();
         util.verifyExplainInsert(
                 "UPDATE t SET b = 'v2' WHERE a = 123 AND b = 'v1'", explainDetails);
     }
 
-    @Test
-    public void testUpdateWithSubQuery() {
+    @TestTemplate
+    void testUpdateWithSubQuery() {
         createTableForUpdate();
         util.tableEnv()
                 .executeSql(
@@ -94,8 +98,8 @@ public class RowLevelUpdateTest extends TableTestBase {
                 "UPDATE t SET b = 'v2' WHERE a = (SELECT count(*) FROM t1)", explainDetails);
     }
 
-    @Test
-    public void testUpdateAllColsWithOnlyRequireUpdatedCols() {
+    @TestTemplate
+    void testUpdateAllColsWithOnlyRequireUpdatedCols() {
         util.tableEnv()
                 .executeSql(
                         String.format(
@@ -109,8 +113,8 @@ public class RowLevelUpdateTest extends TableTestBase {
                 "UPDATE t SET b = 'v2', a = 123, c = c + 1 WHERE c > 123", explainDetails);
     }
 
-    @Test
-    public void testUpdatePartColsWithOnlyRequireUpdatedCols() {
+    @TestTemplate
+    void testUpdatePartColsWithOnlyRequireUpdatedCols() {
         util.tableEnv()
                 .executeSql(
                         String.format(
@@ -124,8 +128,8 @@ public class RowLevelUpdateTest extends TableTestBase {
                 "UPDATE t SET b = 'v2', a = 123, c = c + 1 WHERE c > 123", explainDetails);
     }
 
-    @Test
-    public void testUpdateWithCustomColumns() {
+    @TestTemplate
+    void testUpdateWithCustomColumns() {
         util.tableEnv()
                 .executeSql(
                         String.format(
@@ -139,8 +143,8 @@ public class RowLevelUpdateTest extends TableTestBase {
         util.verifyExplainInsert("UPDATE t SET b = 'v2' WHERE b = '123'", explainDetails);
     }
 
-    @Test
-    public void testUpdateWithMetaColumns() {
+    @TestTemplate
+    void testUpdateWithMetaColumns() {
         util.tableEnv()
                 .executeSql(
                         String.format(
@@ -152,6 +156,29 @@ public class RowLevelUpdateTest extends TableTestBase {
                                         + ") ",
                                 updateMode));
         util.verifyExplainInsert("UPDATE t SET b = 'v2' WHERE b = '123'", explainDetails);
+    }
+
+    @TestTemplate
+    void testUpdateWithCompositeType() {
+        util.tableEnv()
+                .executeSql(
+                        String.format(
+                                "CREATE TABLE t ("
+                                        + "a int,"
+                                        + "b ROW<b1 STRING, b2 INT>,"
+                                        + "c ROW<c1 BIGINT, c2 STRING>"
+                                        + ") WITH ("
+                                        + "'connector' = 'test-update-delete', "
+                                        + "'update-mode' = '%s'"
+                                        + ") ",
+                                updateMode));
+
+        assertThatExceptionOfType(SqlParserException.class)
+                .isThrownBy(
+                        () ->
+                                util.verifyExplainInsert(
+                                        "UPDATE t SET b.b1 = 'v2', c.c1 = 1000 WHERE b = '123'",
+                                        explainDetails));
     }
 
     private void createTableForUpdate() {

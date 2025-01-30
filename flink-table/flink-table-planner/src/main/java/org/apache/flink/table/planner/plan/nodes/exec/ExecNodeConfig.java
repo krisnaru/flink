@@ -19,6 +19,7 @@
 package org.apache.flink.table.planner.plan.nodes.exec;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
@@ -27,6 +28,7 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.ExecutionConfigOptions.UidGeneration;
 import org.apache.flink.table.planner.delegation.PlannerBase;
 
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -64,6 +66,11 @@ public final class ExecNodeConfig implements ReadableConfig {
         return new ExecNodeConfig(new Configuration(), nodeConfig, isCompiled);
     }
 
+    @VisibleForTesting
+    public static ExecNodeConfig ofTableConfig(TableConfig tableConfig, boolean isCompiled) {
+        return new ExecNodeConfig(tableConfig, TableConfig.getDefault(), isCompiled);
+    }
+
     @Override
     public <T> T get(ConfigOption<T> option) {
         return nodeConfig.getOptional(option).orElseGet(() -> tableConfig.get(option));
@@ -78,23 +85,37 @@ public final class ExecNodeConfig implements ReadableConfig {
         return tableConfig.getOptional(option);
     }
 
-    /** @return The duration until state which was not updated will be retained. */
+    @Override
+    @Internal
+    public Map<String, String> toMap() {
+        Map<String, String> nodeConfigMap = nodeConfig.toMap();
+        Map<String, String> tableConfigMap = tableConfig.toMap();
+        tableConfigMap.putAll(nodeConfigMap);
+        return tableConfigMap;
+    }
+
+    /**
+     * @return The duration until state which was not updated will be retained.
+     */
     public long getStateRetentionTime() {
         return get(ExecutionConfigOptions.IDLE_STATE_RETENTION).toMillis();
     }
 
-    /** @return Whether the {@link ExecNode} translation happens as part of a plan compilation. */
+    /**
+     * @return Whether the {@link ExecNode} translation happens as part of a plan compilation.
+     */
     public boolean isCompiled() {
         return isCompiled;
     }
 
-    /** @return Whether transformations should set a UID. */
+    /**
+     * @return Whether transformations should set a UID.
+     */
     public boolean shouldSetUid() {
         final UidGeneration uidGeneration = get(ExecutionConfigOptions.TABLE_EXEC_UID_GENERATION);
         switch (uidGeneration) {
             case PLAN_ONLY:
-                return isCompiled
-                        && !get(ExecutionConfigOptions.TABLE_EXEC_LEGACY_TRANSFORMATION_UIDS);
+                return isCompiled;
             case ALWAYS:
                 return true;
             case DISABLED:

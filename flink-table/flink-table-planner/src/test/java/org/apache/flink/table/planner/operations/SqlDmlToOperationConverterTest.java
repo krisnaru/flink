@@ -34,6 +34,7 @@ import org.apache.flink.table.operations.Operation;
 import org.apache.flink.table.operations.QueryOperation;
 import org.apache.flink.table.operations.SinkModifyOperation;
 import org.apache.flink.table.operations.StatementSetOperation;
+import org.apache.flink.table.operations.TruncateTableOperation;
 import org.apache.flink.table.planner.calcite.FlinkPlannerImpl;
 import org.apache.flink.table.planner.factories.TestUpdateDeleteTableFactory;
 import org.apache.flink.table.planner.parse.CalciteParser;
@@ -41,7 +42,6 @@ import org.apache.flink.table.planner.parse.CalciteParser;
 import org.apache.calcite.sql.SqlNode;
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -52,8 +52,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.InstanceOfAssertFactories.type;
 
-/** Test cases for the DML statements for {@link SqlToOperationConverter}. */
-public class SqlDmlToOperationConverterTest extends SqlToOperationConverterTestBase {
+/** Test cases for the DML statements for {@link SqlNodeToOperationConversion}. */
+public class SqlDmlToOperationConverterTest extends SqlNodeToOperationConversionTestBase {
 
     @Test
     public void testExplainWithSelect() {
@@ -250,14 +250,14 @@ public class SqlDmlToOperationConverterTest extends SqlToOperationConverterTestB
         Map<String, String> options = new HashMap<>();
         options.put("connector", TestUpdateDeleteTableFactory.IDENTIFIER);
         CatalogTable catalogTable =
-                CatalogTable.of(
-                        Schema.newBuilder()
-                                .column("a", DataTypes.INT().notNull())
-                                .column("c", DataTypes.STRING().notNull())
-                                .build(),
-                        null,
-                        Collections.emptyList(),
-                        options);
+                CatalogTable.newBuilder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT().notNull())
+                                        .column("c", DataTypes.STRING().notNull())
+                                        .build())
+                        .options(options)
+                        .build();
         ObjectIdentifier tableIdentifier = ObjectIdentifier.of("builtin", "default", "test_delete");
         catalogManager.createTable(catalogTable, tableIdentifier, false);
 
@@ -284,15 +284,15 @@ public class SqlDmlToOperationConverterTest extends SqlToOperationConverterTestB
         Map<String, String> options = new HashMap<>();
         options.put("connector", TestUpdateDeleteTableFactory.IDENTIFIER);
         CatalogTable catalogTable =
-                CatalogTable.of(
-                        Schema.newBuilder()
-                                .column("a", DataTypes.INT().notNull())
-                                .column("b", DataTypes.BIGINT().nullable())
-                                .column("c", DataTypes.STRING().notNull())
-                                .build(),
-                        null,
-                        Collections.emptyList(),
-                        options);
+                CatalogTable.newBuilder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT().notNull())
+                                        .column("b", DataTypes.BIGINT().nullable())
+                                        .column("c", DataTypes.STRING().notNull())
+                                        .build())
+                        .options(options)
+                        .build();
         ObjectIdentifier tableIdentifier = ObjectIdentifier.of("builtin", "default", "test_update");
         catalogManager.createTable(catalogTable, tableIdentifier, false);
 
@@ -308,12 +308,25 @@ public class SqlDmlToOperationConverterTest extends SqlToOperationConverterTestB
         checkUpdateOperation(operation);
     }
 
+    @Test
+    public void testTruncateTable() {
+        String sql = "TRUNCATE TABLE t1";
+        FlinkPlannerImpl planner = getPlannerBySqlDialect(SqlDialect.DEFAULT);
+        final CalciteParser parser = getParserBySqlDialect(SqlDialect.DEFAULT);
+        Operation operation = parse(sql, planner, parser);
+        assertThat(operation).isInstanceOf(TruncateTableOperation.class);
+        TruncateTableOperation truncateTableOperation = (TruncateTableOperation) operation;
+        assertThat(truncateTableOperation.getTableIdentifier())
+                .isEqualTo(ObjectIdentifier.of("builtin", "default", "t1"));
+    }
+
     private void checkExplainSql(String sql) {
         FlinkPlannerImpl planner = getPlannerBySqlDialect(SqlDialect.DEFAULT);
         CalciteParser parser = getParserBySqlDialect(SqlDialect.DEFAULT);
         SqlNode node = parser.parse(sql);
         assertThat(node).isInstanceOf(SqlRichExplain.class);
-        Operation operation = SqlToOperationConverter.convert(planner, catalogManager, node).get();
+        Operation operation =
+                SqlNodeToOperationConversion.convert(planner, catalogManager, node).get();
         assertThat(operation).isInstanceOf(ExplainOperation.class);
     }
 

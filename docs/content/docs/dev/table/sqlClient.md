@@ -67,6 +67,25 @@ For gateway mode, you can start the CLI by calling:
 
 In the gateway mode, the CLI submits the SQL to the specified remote gateway to execute statements.
 
+The `<gateway address>` can be provided in two formats: as a `host:port` combination or as a full URL.
+
+If you need to pass custom HTTP headers, you can do so by setting the FLINK_REST_CLIENT_HEADERS environment variable. For example:
+
+```bash
+export FLINK_REST_CLIENT_HEADERS="Cookie:myauthcookie=foobar;othercookie=baz"
+./bin/sql-client.sh gateway --endpoint https://your-sql-gateway.endpoint.com/authenticated/sql
+```
+For multiple headers, separate them with a newline:
+
+```bash
+export FLINK_REST_CLIENT_HEADERS=$(cat << EOF
+Cookie:myauthcookie=foobar
+Cache-Control: no-cache
+EOF)
+```
+
+By default, the SQL Client will use the truststore configured using the `security.ssl.rest.truststore` and `security.ssl.rest.truststore-password` properties in the [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}) on the SQL client side. If these properties aren't explicitly configured, the client will use the default certificate stores provided by the JDK.
+
 <span class="label label-danger">Note</span> SQL Client only supports connecting to the [REST Endpoint]({{< ref "docs/dev/table/sql-gateway/rest" >}}#rest-api) since version v2.
 
 See [SQL Client startup options](#sql-client-startup-options) below for more details.
@@ -87,7 +106,7 @@ FROM
 GROUP BY name;
 ```
 
-The SQL client will retrieve the results from the cluster and visualize them (you can close the result view by pressing the `Q` key):
+The SQL Client will retrieve the results from the cluster and visualize them (you can close the result view by pressing the `Q` key):
 
 ```text
 +-------+-----+
@@ -106,7 +125,7 @@ The [configuration section](#configuration) explains how to declare table source
 
 ### Key-strokes
 
-There is a list of available key-strokes in SQL client
+There is a list of available key-strokes in SQL Client
 
 | Key-Stroke (Linux, Windows(WSL)) | Key-Stroke (Mac) | Description                                                                            |
 |:---------------------------------|------------------|:---------------------------------------------------------------------------------------|
@@ -140,7 +159,7 @@ There is a list of available key-strokes in SQL client
 
 ### Getting help
 
-The documentation of the SQL client commands can be accessed by typing the `HELP` command.
+The documentation of the SQL Client commands can be accessed by typing the `HELP` command.
 
 See also the general [SQL]({{< ref "docs/dev/table/sql/overview" >}}) documentation.
 
@@ -162,6 +181,8 @@ Mode "embedded" (default) submits Flink jobs from the local machine.
 
   Syntax: [embedded] [OPTIONS]
   "embedded" mode options:
+     -D <session dynamic config key=val>        The dynamic config key=val for a
+                                                session.
      -f,--file <script file>                    Script file that should be
                                                 executed. In this mode, the
                                                 client will not open an
@@ -238,8 +259,8 @@ Mode "embedded" (default) submits Flink jobs from the local machine.
                                                 --pyExecutable
                                                 /usr/local/bin/python3). The
                                                 python UDF worker depends on
-                                                Python 3.7+, Apache Beam
-                                                (version == 2.43.0), Pip
+                                                Python 3.8+, Apache Beam
+                                                (version >= 2.54.0, <= 2.61.0), Pip
                                                 (version >= 20.3) and SetupTools
                                                 (version >= 37.0.0). Please
                                                 ensure that the specified
@@ -277,27 +298,14 @@ Mode "embedded" (default) submits Flink jobs from the local machine.
      -s,--session <session identifier>          The identifier for a session.
                                                 'default' is the default
                                                 identifier.
-     -u,--update <SQL update statement>         Deprecated Experimental (for
-                                                testing only!) feature:
-                                                Instructs the SQL Client to
-                                                immediately execute the given
-                                                update statement after starting
-                                                up. The process is shut down
-                                                after the statement has been
-                                                submitted to the cluster and
-                                                returns an appropriate return
-                                                code. Currently, this feature is
-                                                only supported for INSERT INTO
-                                                statements that declare the
-                                                target sink table.Please use
-                                                option -f to submit update
-                                                statement.
 
 
 Mode "gateway" mode connects to the SQL gateway for submission.
 
   Syntax: gateway [OPTIONS]
   "gateway" mode options:
+     -D <session dynamic config key=val>   The dynamic config key=val for a
+                                           session.
      -e,--endpoint <SQL Gateway address>   The address of the remote SQL Gateway
                                            to connect.
      -f,--file <script file>               Script file that should be executed.
@@ -316,23 +324,11 @@ Mode "gateway" mode connects to the SQL gateway for submission.
                                            or insert into the init file.
      -s,--session <session identifier>     The identifier for a session.
                                            'default' is the default identifier.
-     -u,--update <SQL update statement>    Deprecated Experimental (for testing
-                                           only!) feature: Instructs the SQL
-                                           Client to immediately execute the
-                                           given update statement after starting
-                                           up. The process is shut down after
-                                           the statement has been submitted to
-                                           the cluster and returns an
-                                           appropriate return code. Currently,
-                                           this feature is only supported for
-                                           INSERT INTO statements that declare
-                                           the target sink table.Please use
-                                           option -f to submit update statement.
 ```
 
 ### SQL Client Configuration
 
-You can configure the SQL client by setting the options below, or any valid [Flink configuration]({{< ref "docs/dev/table/config" >}}) entry:
+You can configure the SQL Client by setting the options below, or any valid [Flink configuration]({{< ref "docs/dev/table/config" >}}) entry:
 
 ```sql
 SET 'key' = 'value';
@@ -340,7 +336,7 @@ SET 'key' = 'value';
 
 {{< generated/sql_client_configuration >}}
 
-### SQL client result modes
+### SQL Client result modes
 
 The CLI supports **three modes** for maintaining and visualizing results.
 
@@ -480,7 +476,7 @@ CREATE VIEW MyCustomView AS SELECT MyField2 FROM MyTable;
 
 -- Define user-defined functions here.
 
-CREATE FUNCTION foo.bar.AggregateUDF AS myUDF;
+CREATE FUNCTION myUDF AS 'foo.bar.AggregateUDF';
 
 -- Properties that change the fundamental execution behavior of a table program.
 
@@ -537,7 +533,7 @@ information on how to configure connector and format dependencies.
 
 {{< top >}}
 
-Use SQL Client to submit job
+Usage
 ----------------------------
 
 SQL Client allows users to submit jobs either within the interactive command line or using `-f` option to execute sql file.
@@ -552,9 +548,9 @@ SQL Client will print success message if the statement is executed successfully.
 By default, the error message only contains the error cause. In order to print the full exception stack for debugging, please set the
 `sql-client.verbose` to true through command `SET 'sql-client.verbose' = 'true';`.
 
-### Execute SQL Files
+### Execute SQL Files in a Session Cluster
 
-SQL Client supports to execute a SQL script file with the `-f` option. SQL Client will execute
+SQL Client supports executing a SQL script file with the `-f` option. SQL Client will execute
 statements one by one in the SQL script file and print execution messages for each executed statements.
 Once a statement fails, the SQL Client will exit and all the remaining statements will not be executed.
 
@@ -588,7 +584,7 @@ SET 'yarn.application.queue' = 'root';
 SET 'parallelism.default' = '100';
 
 -- restore from the specific savepoint path
-SET 'execution.savepoint.path' = '/tmp/flink-savepoints/savepoint-cca7bc-bb1e257f0dab';
+SET 'execution.state-recovery.path' = '/tmp/flink-savepoints/savepoint-cca7bc-bb1e257f0dab';
 
 INSERT INTO pageviews_enriched
 SELECT *
@@ -604,6 +600,24 @@ This configuration:
 - submit a sql job that load the savepoint from the specified savepoint path.
 
 <span class="label label-danger">Attention</span> Compared to the interactive mode, SQL Client will stop execution and exits when there are errors.
+
+### Deploy SQL Files to an Application Cluster
+
+SQL Client also supports deploying a SQL script file to an Application Cluster with the `-f` option, if you specify the deployment target in the config.yaml or startup options.
+Here is an example to deploy script file in an Application Cluster.
+
+```bash 
+./bin/sql-client.sh -f oss://path/to/script.sql \
+      -Dexecution.target=kubernetes-application \
+      -Dkubernetes.cluster-id=${CLUSTER_ID} \
+      -Dkubernetes.container.image.ref=${FLINK_IMAGE_NAME}'
+```
+
+After execution, SQL Client will print the cluster id on the terminal. The script can contain any statement supported by Flink. But Application cluster only supports one job, please refer to the 
+[Application Mode]({{< ref "docs/deployment/overview#application-mode" >}}) for the limitations.
+
+<span class="label label-danger">Attention</span> When deploying a script to the cluster, SQL Client only supports running with `--jars` startup option, other options, e.g. `--init` 
+are not supported.
 
 ### Execute a set of SQL statements
 
@@ -642,7 +656,7 @@ Flink SQL> CREATE TABLE pageviews (
 >   'properties.bootstrap.servers' = '...',
 >   'format' = 'avro'
 > );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 
 Flink SQL> CREATE TABLE pageview (
 >   page_id BIGINT,
@@ -652,7 +666,7 @@ Flink SQL> CREATE TABLE pageview (
 >   'url' = 'jdbc:mysql://localhost:3306/mydatabase',
 >   'table-name' = 'pageview'
 > );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 
 Flink SQL> CREATE TABLE uniqueview (
 >   page_id BIGINT,
@@ -662,7 +676,7 @@ Flink SQL> CREATE TABLE uniqueview (
 >   'url' = 'jdbc:mysql://localhost:3306/mydatabase',
 >   'table-name' = 'uniqueview'
 > );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 
 Flink SQL> EXECUTE STATEMENT SET
 > BEGIN
@@ -750,7 +764,11 @@ Cluster ID: StandaloneClusterId
 Job ID: 6f922fe5cba87406ff23ae4a7bb79044
 ```
 
-<span class="label label-danger">Attention</span> The SQL Client does not track the status of the running Flink job after submission. The CLI process can be shutdown after the submission without affecting the detached query. Flink's `restart strategy` takes care of the fault-tolerance. A query can be cancelled using Flink's web interface, command-line, or REST API.
+<span class="label label-danger">Attention</span> The SQL Client does not track the status of the
+running Flink job after submission. The CLI process can be shutdown after the submission without
+affecting the detached query. Flink's `restart strategy` takes care of the fault-tolerance. Please
+use the job statements to [monitor the detached query status]({{< ref "docs/dev/table/sqlClient" >}}#monitoring-job-status)
+or [stop the detached query]({{< ref "docs/dev/table/sqlClient" >}}#terminating-a-job).
 
 However, for batch users, it's more common that the next DML statement requires waiting until the
 previous DML statement finishes. In order to execute DML statements synchronously, you can set
@@ -773,7 +791,7 @@ Flink SQL> INSERT INTO MyTableSink SELECT * FROM MyTableSource;
 Flink supports to start the job with specified savepoint. In SQL Client, it's allowed to use `SET` command to specify the path of the savepoint.
 
 ```sql
-Flink SQL> SET 'execution.savepoint.path' = '/tmp/flink-savepoints/savepoint-cca7bc-bb1e257f0dab';
+Flink SQL> SET 'execution.state-recovery.path' = '/tmp/flink-savepoints/savepoint-cca7bc-bb1e257f0dab';
 [INFO] Session property has been set.
 
 -- all the following DML statements will be restroed from the specified savepoint path
@@ -785,7 +803,7 @@ When the path to savepoint is specified, Flink will try to restore the state fro
 Because the specified savepoint path will affect all the following DML statements, you can use `RESET` command to reset this config option, i.e. disable restoring from savepoint.
 
 ```sql
-Flink SQL> RESET execution.savepoint.path;
+Flink SQL> RESET 'execution.state-recovery.path';
 [INFO] Session property has been reset.
 ```
 
@@ -806,10 +824,60 @@ Flink SQL> INSERT INTO ...
 Because the specified job name will affect all the following queries and DML statements, you can also use `RESET` command to reset this configuration, i.e. use default job names.
 
 ```sql
-Flink SQL> RESET pipeline.name;
+Flink SQL> RESET 'pipeline.name';
 [INFO] Session property has been reset.
 ```
 
 If the option `pipeline.name` is not specified, SQL Client will generate a default name for the submitted job, e.g. `insert-into_<sink_table_name>` for `INSERT INTO` statements.
+
+### Monitoring Job Status
+
+SQL Client supports to list jobs status in the cluster through `SHOW JOBS` statements.
+
+```sql
+Flink SQL> SHOW JOBS;
++----------------------------------+---------------+----------+-------------------------+
+|                           job id |      job name |   status |              start time |
++----------------------------------+---------------+----------+-------------------------+
+| 228d70913eab60dda85c5e7f78b5782c | kafka-to-hive |  RUNNING | 2023-02-11T05:03:51.523 |
++----------------------------------+---------------+----------+-------------------------+
+```
+
+### Terminating a Job
+
+SQL Client supports to stop jobs with or without savepoints through `STOP JOB` statements.
+
+```sql
+Flink SQL> STOP JOB '228d70913eab60dda85c5e7f78b5782c' WITH SAVEPOINT;
++-----------------------------------------+
+|                          savepoint path |
++-----------------------------------------+
+| file:/tmp/savepoint-3addd4-0b224d9311e6 |
++-----------------------------------------+
+```
+
+The savepoint path could be specified with [execution.checkpointing.savepoint-dir]({{< ref "docs/deployment/config" >}}#state-savepoints-dir) 
+either in the cluster configuration or session configuration (the latter would take precedence).
+
+For more details about stopping jobs, please refer to [Job Statements]({{< ref "docs/dev/table/sql/job" >}}#stop-job).
+
+### SQL Syntax highlighting
+
+SQL Client can highlight SQL syntax with several color schemes.
+With `sql-client.display.color-schema` it could be set a color scheme.
+Available color schemes: `chester`, `dracula`, `solarized`, `vs2010`, `obsidian`, `geshi`, `dark`, `light`, `default` (no highlighting).
+In case of wrong name the fallback is to `default`.
+
+| Color schema \ Style | Keyword      | Default | Comment        | Hint         | Quoted  | SQL Identifier |
+|:---------------------|--------------|:--------|:---------------|:-------------|:--------|:---------------|
+| `Default`            | Default      | Default | Default        | Default      | Default | Default        |
+| `Chester`            | Bold blue    | White   | Italic green   | Bold green   | Red     | Cyan           |
+| `Dark`               | Bold blue    | White   | Italic bright  | Bold bright  | Green   | Cyan           |
+| `Dracula`            | Bold magenta | White   | Italic cyan    | Bold cyan    | Green   | Red            |
+| `Geshi`              | Bold #993333 | White   | Italic #808080 | Bold #808080 | #66CC66 | #000099        |
+| `Light`              | Bold red     | Black   | Italic bright  | Bold bright  | Green   | Cyan           |
+| `Obsidian`           | Bold green   | White   | Italic bright  | Bold bright  | Red     | Magenta        |
+| `VS2010`             | Bold blue    | White   | Italic green   | Bold green   | Red     | Magenta        |
+| `Solarized`          | Bold yellow  | Blue    | Italic bright  | Bold bright  | Green   | Red            |
 
 {{< top >}}

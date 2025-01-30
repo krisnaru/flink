@@ -18,6 +18,7 @@
 
 package org.apache.flink.connectors.hive;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.MemorySize;
@@ -50,19 +51,31 @@ public class HiveOptions {
                                     "If it is true, flink will read the files of partitioned hive table from subdirectories under the partition directory to be read.\n"
                                             + "If it is false, an exception that 'not a file: xxx' will be thrown when the partition directory contains any sub-directory.");
 
-    public static final ConfigOption<Boolean> TABLE_EXEC_HIVE_INFER_SOURCE_PARALLELISM =
-            key("table.exec.hive.infer-source-parallelism")
-                    .booleanType()
-                    .defaultValue(true)
+    @PublicEvolving
+    public static final ConfigOption<InferMode> TABLE_EXEC_HIVE_INFER_SOURCE_PARALLELISM_MODE =
+            key("table.exec.hive.infer-source-parallelism.mode")
+                    .enumType(InferMode.class)
+                    .defaultValue(InferMode.DYNAMIC)
                     .withDescription(
-                            "If is false, parallelism of source are set by config.\n"
-                                    + "If is true, source parallelism is inferred according to splits number.\n");
+                            Description.builder()
+                                    .text(
+                                            "An option for selecting the hive source parallelism inference mode to infer parallelism according to splits number.")
+                                    .list(
+                                            text(
+                                                    "'static' represents static inference, which will infer source parallelism at job creation stage."),
+                                            text(
+                                                    "'dynamic' represents dynamic inference, which will infer parallelism at job execution stage and could more accurately infer the source parallelism."),
+                                            text(
+                                                    "'none' represents disabling parallelism inference."))
+                                    .build());
 
     public static final ConfigOption<Integer> TABLE_EXEC_HIVE_INFER_SOURCE_PARALLELISM_MAX =
             key("table.exec.hive.infer-source-parallelism.max")
                     .intType()
                     .defaultValue(1000)
-                    .withDescription("Sets max infer parallelism for source operator.");
+                    .withDescription(
+                            "Sets max infer parallelism for source operator. "
+                                    + "Note that the default value is effective only in the static parallelism inference mode.");
 
     public static final ConfigOption<Boolean> TABLE_EXEC_HIVE_FALLBACK_MAPRED_WRITER =
             key("table.exec.hive.fallback-mapred-writer")
@@ -134,11 +147,12 @@ public class HiveOptions {
                                     + " custom: use policy class to create a commit policy."
                                     + " Support to configure multiple policies: 'metastore,success-file'.");
 
-    public static final ConfigOption<String> SINK_PARTITION_COMMIT_POLICY_CLASS =
-            FileSystemConnectorOptions.SINK_PARTITION_COMMIT_POLICY_CLASS;
-
-    public static final ConfigOption<String> SINK_PARTITION_COMMIT_SUCCESS_FILE_NAME =
-            FileSystemConnectorOptions.SINK_PARTITION_COMMIT_SUCCESS_FILE_NAME;
+    public static final ConfigOption<Integer> TABLE_EXEC_HIVE_READ_STATISTICS_THREAD_NUM =
+            key("table.exec.hive.read-statistics.thread-num")
+                    .intType()
+                    .defaultValue(Runtime.getRuntime().availableProcessors())
+                    .withDescription(
+                            "The thread number to read input format statistics. It should be bigger than 0.");
 
     public static final ConfigOption<MemorySize> COMPACT_SMALL_FILES_AVG_SIZE =
             key("compaction.small-files.avg-size")
@@ -224,12 +238,9 @@ public class HiveOptions {
             key("streaming-source.partition-order")
                     .enumType(PartitionOrder.class)
                     .defaultValue(PartitionOrder.PARTITION_NAME)
-                    .withDeprecatedKeys("streaming-source.consume-order")
                     .withDescription(
                             Description.builder()
                                     .text("The partition order of the streaming source.")
-                                    .text(
-                                            "This is a synonym for the deprecated 'streaming-source.consume-order' option.")
                                     .build());
 
     public static final ConfigOption<Duration> LOOKUP_JOIN_CACHE_TTL =
@@ -266,6 +277,32 @@ public class HiveOptions {
         private final InlineElement description;
 
         PartitionOrder(String value, InlineElement description) {
+            this.value = value;
+            this.description = description;
+        }
+
+        @Override
+        public String toString() {
+            return value;
+        }
+
+        @Override
+        public InlineElement getDescription() {
+            return description;
+        }
+    }
+
+    /** Infer mode used for {@link #TABLE_EXEC_HIVE_INFER_SOURCE_PARALLELISM_MODE}. */
+    public enum InferMode implements DescribedEnum {
+        STATIC("static", text("Static parallelism inference mode.")),
+        DYNAMIC("dynamic", text("Dynamic parallelism inference mode.")),
+        NONE("none", text("Disable parallelism inference."));
+
+        private final String value;
+
+        private final InlineElement description;
+
+        InferMode(String value, InlineElement description) {
             this.value = value;
             this.description = description;
         }

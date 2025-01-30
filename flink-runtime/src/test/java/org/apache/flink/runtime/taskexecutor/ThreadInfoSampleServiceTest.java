@@ -22,7 +22,6 @@ package org.apache.flink.runtime.taskexecutor;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.messages.ThreadInfoSample;
 import org.apache.flink.runtime.webmonitor.threadinfo.ThreadInfoSamplesRequest;
-import org.apache.flink.util.TestLogger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,12 +37,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.core.testutils.FlinkAssertions.assertThatFuture;
 import static org.apache.flink.runtime.taskexecutor.IdleTestTask.executeWithTerminationGuarantee;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ThreadInfoSampleService}. */
-public class ThreadInfoSampleServiceTest extends TestLogger {
+class ThreadInfoSampleServiceTest {
 
     private static final int NUMBER_OF_SAMPLES = 10;
     private static final Duration DELAY_BETWEEN_SAMPLES = Duration.ofMillis(10);
@@ -56,13 +56,13 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
     private ThreadInfoSampleService threadInfoSampleService;
 
     @BeforeEach
-    public void setUp() throws Exception {
+    void setUp() throws Exception {
         threadInfoSampleService =
                 new ThreadInfoSampleService(Executors.newSingleThreadScheduledExecutor());
     }
 
     @AfterEach
-    public void tearDown() throws Exception {
+    void tearDown() throws Exception {
         if (threadInfoSampleService != null) {
             threadInfoSampleService.close();
         }
@@ -70,7 +70,7 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
 
     /** Tests successful thread info samples request. */
     @Test
-    public void testSampleTaskThreadInfo() throws Exception {
+    void testSampleTaskThreadInfo() throws Exception {
         Set<IdleTestTask> tasks = new HashSet<>();
         executeWithTerminationGuarantee(
                 () -> {
@@ -78,12 +78,7 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
                     tasks.add(new IdleTestTask());
                     Thread.sleep(2000);
 
-                    Map<Long, ExecutionAttemptID> threads =
-                            tasks.stream()
-                                    .collect(
-                                            Collectors.toMap(
-                                                    task -> task.getExecutingThread().getId(),
-                                                    IdleTestTask::getExecutionId));
+                    Map<Long, ExecutionAttemptID> threads = collectExecutionAttempts(tasks);
                     final Map<ExecutionAttemptID, Collection<ThreadInfoSample>> threadInfoSamples =
                             threadInfoSampleService
                                     .requestThreadInfoSamples(threads, requestParams)
@@ -104,17 +99,13 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
 
     /** Tests that stack traces are truncated when exceeding the configured depth. */
     @Test
-    public void testTruncateStackTraceIfLimitIsSpecified() throws Exception {
+    void testTruncateStackTraceIfLimitIsSpecified() throws Exception {
         Set<IdleTestTask> tasks = new HashSet<>();
         executeWithTerminationGuarantee(
                 () -> {
                     tasks.add(new IdleTestTask());
-                    Map<Long, ExecutionAttemptID> threads =
-                            tasks.stream()
-                                    .collect(
-                                            Collectors.toMap(
-                                                    task -> task.getExecutingThread().getId(),
-                                                    IdleTestTask::getExecutionId));
+                    Map<Long, ExecutionAttemptID> threads = collectExecutionAttempts(tasks);
+
                     final Map<ExecutionAttemptID, Collection<ThreadInfoSample>> threadInfoSamples1 =
                             threadInfoSampleService
                                     .requestThreadInfoSamples(threads, requestParams)
@@ -149,7 +140,7 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
 
     /** Test that negative numSamples parameter is handled. */
     @Test
-    public void testThrowExceptionIfNumSamplesIsNegative() {
+    void testThrowExceptionIfNumSamplesIsNegative() {
         Set<IdleTestTask> tasks = new HashSet<>();
         assertThatThrownBy(
                         () ->
@@ -158,14 +149,7 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
                                             tasks.add(new IdleTestTask());
 
                                             Map<Long, ExecutionAttemptID> threads =
-                                                    tasks.stream()
-                                                            .collect(
-                                                                    Collectors.toMap(
-                                                                            task ->
-                                                                                    task.getExecutingThread()
-                                                                                            .getId(),
-                                                                            IdleTestTask
-                                                                                    ::getExecutionId));
+                                                    collectExecutionAttempts(tasks);
                                             threadInfoSampleService.requestThreadInfoSamples(
                                                     threads,
                                                     new ThreadInfoSamplesRequest(
@@ -181,24 +165,28 @@ public class ThreadInfoSampleServiceTest extends TestLogger {
 
     /** Test that sampling a non-running task throws an exception. */
     @Test
-    public void testShouldThrowExceptionIfTaskIsNotRunningBeforeSampling()
+    void testShouldThrowExceptionIfTaskIsNotRunningBeforeSampling()
             throws ExecutionException, InterruptedException {
         Set<SampleableTask> tasks = new HashSet<>();
         tasks.add(new NotRunningTask());
 
-        Map<Long, ExecutionAttemptID> threads =
-                tasks.stream()
-                        .collect(
-                                Collectors.toMap(
-                                        task -> task.getExecutingThread().getId(),
-                                        SampleableTask::getExecutionId));
+        Map<Long, ExecutionAttemptID> threads = collectExecutionAttempts(tasks);
         final CompletableFuture<Map<ExecutionAttemptID, Collection<ThreadInfoSample>>>
                 sampleFuture =
                         threadInfoSampleService.requestThreadInfoSamples(threads, requestParams);
 
-        assertThat(sampleFuture).failsWithin(Duration.ofSeconds(10));
+        assertThatFuture(sampleFuture).eventuallyFails();
         assertThat(sampleFuture.handle((ignored, e) -> e).get())
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    private static Map<Long, ExecutionAttemptID> collectExecutionAttempts(
+            Set<? extends SampleableTask> tasks) {
+        return tasks.stream()
+                .collect(
+                        Collectors.toMap(
+                                task -> task.getExecutingThread().getId(),
+                                SampleableTask::getExecutionId));
     }
 
     private static class NotRunningTask implements SampleableTask {

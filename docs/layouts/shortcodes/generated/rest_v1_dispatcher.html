@@ -70,6 +70,9 @@
         "web-history" : {
           "type" : "boolean"
         },
+        "web-rescale" : {
+          "type" : "boolean"
+        },
         "web-submit" : {
           "type" : "boolean"
         }
@@ -454,7 +457,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     <tr>
       <td colspan="2">
         <ul>
-<li><code>program-args</code> (optional): Deprecated, please use 'programArg' instead. String value that specifies the arguments for the program or plan</li>
 <li><code>programArg</code> (optional): Comma-separated list of program arguments.</li>
 <li><code>entry-class</code> (optional): String value that specifies the fully qualified name of the entry point class. Overrides the class defined in the jar file manifest.</li>
 <li><code>parallelism</code> (optional): Positive integer value that specifies the desired parallelism for the job.</li>
@@ -485,9 +487,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "parallelism" : {
       "type" : "integer"
     },
-    "programArgs" : {
-      "type" : "string"
-    },
     "programArgsList" : {
       "type" : "array",
       "items" : {
@@ -509,7 +508,8 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo",
   "properties" : {
     "plan" : {
-      "type" : "any"
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
     }
   }
 }</code></pre>
@@ -548,7 +548,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         <ul>
 <li><code>allowNonRestoredState</code> (optional): Boolean value that specifies whether the job submission should be rejected if the savepoint contains state that cannot be mapped back to the job.</li>
 <li><code>savepointPath</code> (optional): String value that specifies the path of the savepoint to restore the job from.</li>
-<li><code>program-args</code> (optional): Deprecated, please use 'programArg' instead. String value that specifies the arguments for the program or plan</li>
 <li><code>programArg</code> (optional): Comma-separated list of program arguments.</li>
 <li><code>entry-class</code> (optional): String value that specifies the fully qualified name of the entry point class. Overrides the class defined in the jar file manifest.</li>
 <li><code>parallelism</code> (optional): Positive integer value that specifies the desired parallelism for the job.</li>
@@ -567,6 +566,10 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "allowNonRestoredState" : {
       "type" : "boolean"
     },
+    "claimMode" : {
+      "type" : "string",
+      "enum" : [ "CLAIM", "NO_CLAIM", "LEGACY" ]
+    },
     "entryClass" : {
       "type" : "string"
     },
@@ -581,9 +584,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     },
     "parallelism" : {
       "type" : "integer"
-    },
-    "programArgs" : {
-      "type" : "string"
     },
     "programArgsList" : {
       "type" : "array",
@@ -936,75 +936,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
 <table class="rest-api table table-bordered">
   <tbody>
     <tr>
-      <td class="text-left" colspan="2"><h5><strong>/jobs</strong></h5></td>
-    </tr>
-    <tr>
-      <td class="text-left" style="width: 20%">Verb: <code>POST</code></td>
-      <td class="text-left">Response code: <code>202 Accepted</code></td>
-    </tr>
-    <tr>
-      <td colspan="2">Submits a job. This call is primarily intended to be used by the Flink client. This call expects a multipart/form-data request that consists of file uploads for the serialized JobGraph, jars and distributed cache artifacts and an attribute named "request" for the JSON payload.</td>
-    </tr>
-    <tr>
-      <td colspan="2">
-        <label>
-          <details>
-          <summary>Request</summary>
-          <pre><code>{
-  "type" : "object",
-  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobSubmitRequestBody",
-  "properties" : {
-    "jobArtifactFileNames" : {
-      "type" : "array",
-      "items" : {
-        "type" : "object",
-        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobSubmitRequestBody:DistributedCacheFile",
-        "properties" : {
-          "entryName" : {
-            "type" : "string"
-          },
-          "fileName" : {
-            "type" : "string"
-          }
-        }
-      }
-    },
-    "jobGraphFileName" : {
-      "type" : "string"
-    },
-    "jobJarFileNames" : {
-      "type" : "array",
-      "items" : {
-        "type" : "string"
-      }
-    }
-  }
-}</code></pre>
-        </label>
-      </td>
-    </tr>
-    <tr>
-      <td colspan="2">
-        <label>
-          <details>
-          <summary>Response</summary>
-          <pre><code>{
-  "type" : "object",
-  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobSubmitResponseBody",
-  "properties" : {
-    "jobUrl" : {
-      "type" : "string"
-    }
-  }
-}</code></pre>
-        </label>
-      </td>
-    </tr>
-  </tbody>
-</table>
-<table class="rest-api table table-bordered">
-  <tbody>
-    <tr>
       <td class="text-left" colspan="2"><h5><strong>/jobs/metrics</strong></h5></td>
     </tr>
     <tr>
@@ -1021,7 +952,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
-<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg".</li>
+<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg, skew".</li>
 <li><code>jobs</code> (optional): Comma-separated list of 32-character hexadecimal strings to select specific jobs.</li>
         </ul>
       </td>
@@ -1099,6 +1030,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "name" : {
             "type" : "string"
           },
+          "pending-operators" : {
+            "type" : "integer"
+          },
           "start-time" : {
             "type" : "integer"
           },
@@ -1174,6 +1108,10 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "jid" : {
       "type" : "any"
     },
+    "job-type" : {
+      "type" : "string",
+      "enum" : [ "BATCH", "STREAMING" ]
+    },
     "maxParallelism" : {
       "type" : "integer"
     },
@@ -1183,8 +1121,12 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "now" : {
       "type" : "integer"
     },
+    "pending-operators" : {
+      "type" : "integer"
+    },
     "plan" : {
-      "type" : "string"
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
     },
     "start-time" : {
       "type" : "integer"
@@ -1198,6 +1140,10 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       "additionalProperties" : {
         "type" : "integer"
       }
+    },
+    "stream-graph" : {
+      "type" : "object",
+      "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
     },
     "timestamps" : {
       "type" : "object",
@@ -1267,6 +1213,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           },
           "parallelism" : {
             "type" : "integer"
+          },
+          "slotSharingGroupId" : {
+            "type" : "any"
           },
           "start-time" : {
             "type" : "integer"
@@ -1503,7 +1452,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           },
           "checkpoint_type" : {
             "type" : "string",
-            "enum" : [ "CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
+            "enum" : [ "CHECKPOINT", "UNALIGNED_CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
           },
           "checkpointed_size" : {
             "type" : "integer"
@@ -1568,7 +1517,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
             },
             "checkpoint_type" : {
               "type" : "string",
-              "enum" : [ "CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
+              "enum" : [ "CHECKPOINT", "UNALIGNED_CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
             },
             "checkpointed_size" : {
               "type" : "integer"
@@ -1670,7 +1619,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
             },
             "checkpoint_type" : {
               "type" : "string",
-              "enum" : [ "CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
+              "enum" : [ "CHECKPOINT", "UNALIGNED_CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
             },
             "checkpointed_size" : {
               "type" : "integer"
@@ -1824,7 +1773,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td class="text-left">Response code: <code>202 Accepted</code></td>
     </tr>
     <tr>
-      <td colspan="2">Triggers a checkpoint. This async operation would return a 'triggerid' for further query identifier.</td>
+      <td colspan="2">Triggers a checkpoint. The 'checkpointType' parameter does not support 'INCREMENTAL' option for now. See FLINK-33723. This async operation would return a 'triggerid' for further query identifier.</td>
     </tr>
     <tr>
       <td colspan="2">Path parameters</td>
@@ -2023,7 +1972,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     },
     "checkpoint_type" : {
       "type" : "string",
-      "enum" : [ "CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
+      "enum" : [ "CHECKPOINT", "UNALIGNED_CHECKPOINT", "SAVEPOINT", "SYNC_SAVEPOINT" ]
     },
     "checkpointed_size" : {
       "type" : "integer"
@@ -2491,6 +2440,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>maxExceptions</code> (optional): Comma-separated list of integer values that specifies the upper limit of exceptions to return.</li>
+<li><code>failureLabelFilter</code> (optional): Collection of string values working as a filter in the form of `key:value` pairs allowing only exceptions with ALL of the specified failure labels to be returned.</li>
         </ul>
       </td>
     </tr>
@@ -2512,30 +2462,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "type" : "object",
   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfoWithHistory",
   "properties" : {
-    "all-exceptions" : {
-      "type" : "array",
-      "items" : {
-        "type" : "object",
-        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfo:ExecutionExceptionInfo",
-        "properties" : {
-          "exception" : {
-            "type" : "string"
-          },
-          "location" : {
-            "type" : "string"
-          },
-          "task" : {
-            "type" : "string"
-          },
-          "taskManagerId" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "integer"
-          }
-        }
-      }
-    },
     "exceptionHistory" : {
       "type" : "object",
       "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfoWithHistory:JobExceptionHistory",
@@ -2552,11 +2478,17 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
                   "type" : "object",
                   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfoWithHistory:ExceptionInfo",
                   "properties" : {
+                    "endpoint" : {
+                      "type" : "string"
+                    },
                     "exceptionName" : {
                       "type" : "string"
                     },
-                    "location" : {
-                      "type" : "string"
+                    "failureLabels" : {
+                      "type" : "object",
+                      "additionalProperties" : {
+                        "type" : "string"
+                      }
                     },
                     "stacktrace" : {
                       "type" : "string"
@@ -2573,11 +2505,17 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
                   }
                 }
               },
+              "endpoint" : {
+                "type" : "string"
+              },
               "exceptionName" : {
                 "type" : "string"
               },
-              "location" : {
-                "type" : "string"
+              "failureLabels" : {
+                "type" : "object",
+                "additionalProperties" : {
+                  "type" : "string"
+                }
               },
               "stacktrace" : {
                 "type" : "string"
@@ -2598,15 +2536,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "type" : "boolean"
         }
       }
-    },
-    "root-exception" : {
-      "type" : "string"
-    },
-    "timestamp" : {
-      "type" : "integer"
-    },
-    "truncated" : {
-      "type" : "boolean"
     }
   }
 }</code></pre>
@@ -2949,7 +2878,8 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo",
   "properties" : {
     "plan" : {
-      "type" : "any"
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
     }
   }
 }</code></pre>
@@ -3081,6 +3011,132 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     }
   }
 }</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/resource-requirements</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Request details on the job's resource requirements.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobResourceRequirementsBody",
+  "additionalProperties" : {
+    "type" : "object",
+    "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements",
+    "properties" : {
+      "parallelism" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements:Parallelism",
+        "properties" : {
+          "lowerBound" : {
+            "type" : "integer"
+          },
+          "upperBound" : {
+            "type" : "integer"
+          }
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/resource-requirements</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>PUT</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Request to update job's resource requirements.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobResourceRequirementsBody",
+  "additionalProperties" : {
+    "type" : "object",
+    "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements",
+    "properties" : {
+      "parallelism" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements:Parallelism",
+        "properties" : {
+          "lowerBound" : {
+            "type" : "integer"
+          },
+          "upperBound" : {
+            "type" : "integer"
+          }
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{}</code></pre>
         </label>
       </td>
     </tr>
@@ -3490,7 +3546,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "end-time" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "metrics" : {
@@ -3826,6 +3882,61 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
 <table class="rest-api table table-bordered">
   <tbody>
     <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/vertices/:vertexid/jm-operator-metrics</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Provides access to jobmanager operator metrics. This is an operator that executes on the jobmanager and the coordinator for FLIP 27 sources is one example of such an operator.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+<li><code>vertexid</code> - 32-character hexadecimal string value that identifies a job vertex.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">Query parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "any"
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
       <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/vertices/:vertexid/metrics</strong></h5></td>
     </tr>
     <tr>
@@ -3934,7 +4045,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "attempt" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "subtask" : {
@@ -3998,7 +4109,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
-<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg".</li>
+<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg, skew".</li>
 <li><code>subtasks</code> (optional): Comma-separated list of integer ranges (e.g. "1,3,5-9") to select specific subtasks.</li>
         </ul>
       </td>
@@ -4076,7 +4187,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "end-time" : {
       "type" : "integer"
     },
-    "host" : {
+    "endpoint" : {
       "type" : "string"
     },
     "metrics" : {
@@ -4206,7 +4317,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "end-time" : {
       "type" : "integer"
     },
-    "host" : {
+    "endpoint" : {
       "type" : "string"
     },
     "metrics" : {
@@ -4476,7 +4587,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "duration" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "subtask" : {
@@ -4584,7 +4695,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "end-time" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "metrics" : {
@@ -5056,7 +5167,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
-<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg".</li>
+<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg, skew".</li>
 <li><code>taskmanagers</code> (optional): Comma-separated list of 32-character hexadecimal strings to select specific task managers.</li>
         </ul>
       </td>
@@ -5093,7 +5204,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td class="text-left">Response code: <code>200 OK</code></td>
     </tr>
     <tr>
-      <td colspan="2">Returns details for a task manager. "metrics.memorySegmentsAvailable" and "metrics.memorySegmentsTotal" are deprecated. Please use "metrics.nettyShuffleMemorySegmentsAvailable" and "metrics.nettyShuffleMemorySegmentsTotal" instead.</td>
+      <td colspan="2">Returns details for a task manager.</td>
     </tr>
     <tr>
       <td colspan="2">Path parameters</td>
@@ -5259,12 +5370,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "type" : "integer"
         },
         "mappedUsed" : {
-          "type" : "integer"
-        },
-        "memorySegmentsAvailable" : {
-          "type" : "integer"
-        },
-        "memorySegmentsTotal" : {
           "type" : "integer"
         },
         "nettyShuffleMemoryAvailable" : {

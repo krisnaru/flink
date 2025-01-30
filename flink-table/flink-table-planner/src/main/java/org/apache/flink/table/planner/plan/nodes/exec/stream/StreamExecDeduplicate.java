@@ -22,6 +22,7 @@ import org.apache.flink.FlinkVersion;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.runtime.asyncprocessing.operators.AsyncKeyedProcessOperator;
 import org.apache.flink.streaming.api.operators.KeyedProcessOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
@@ -37,6 +38,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.SingleTransformationTranslator;
+import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.utils.ExecNodeUtil;
 import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
 import org.apache.flink.table.runtime.generated.GeneratedRecordEqualiser;
@@ -50,12 +52,16 @@ import org.apache.flink.table.runtime.operators.deduplicate.ProcTimeMiniBatchDed
 import org.apache.flink.table.runtime.operators.deduplicate.RowTimeDeduplicateFunction;
 import org.apache.flink.table.runtime.operators.deduplicate.RowTimeMiniBatchDeduplicateFunction;
 import org.apache.flink.table.runtime.operators.deduplicate.RowTimeMiniBatchLatestChangeDeduplicateFunction;
+import org.apache.flink.table.runtime.operators.deduplicate.asyncprocessing.AsyncStateRowTimeDeduplicateFunction;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.runtime.typeutils.TypeCheckUtils;
 import org.apache.flink.table.types.logical.RowType;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonInclude;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
+
+import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.List;
@@ -91,6 +97,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
     public static final String FIELD_NAME_IS_ROWTIME = "isRowtime";
     public static final String FIELD_NAME_KEEP_LAST_ROW = "keepLastRow";
     public static final String FIELD_NAME_GENERATE_UPDATE_BEFORE = "generateUpdateBefore";
+    public static final String STATE_NAME = "deduplicateState";
 
     @JsonProperty(FIELD_NAME_UNIQUE_KEYS)
     private final int[] uniqueKeys;
@@ -103,6 +110,11 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
 
     @JsonProperty(FIELD_NAME_GENERATE_UPDATE_BEFORE)
     private final boolean generateUpdateBefore;
+
+    @Nullable
+    @JsonProperty(FIELD_NAME_STATE)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private final List<StateMetadata> stateMetadataList;
 
     public StreamExecDeduplicate(
             ReadableConfig tableConfig,
@@ -121,6 +133,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                 isRowtime,
                 keepLastRow,
                 generateUpdateBefore,
+                StateMetadata.getOneInputOperatorDefaultMeta(tableConfig, STATE_NAME),
                 Collections.singletonList(inputProperty),
                 outputType,
                 description);
@@ -135,6 +148,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
             @JsonProperty(FIELD_NAME_IS_ROWTIME) boolean isRowtime,
             @JsonProperty(FIELD_NAME_KEEP_LAST_ROW) boolean keepLastRow,
             @JsonProperty(FIELD_NAME_GENERATE_UPDATE_BEFORE) boolean generateUpdateBefore,
+            @Nullable @JsonProperty(FIELD_NAME_STATE) List<StateMetadata> stateMetadataList,
             @JsonProperty(FIELD_NAME_INPUT_PROPERTIES) List<InputProperty> inputProperties,
             @JsonProperty(FIELD_NAME_OUTPUT_TYPE) RowType outputType,
             @JsonProperty(FIELD_NAME_DESCRIPTION) String description) {
@@ -144,6 +158,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
         this.isRowtime = isRowtime;
         this.keepLastRow = keepLastRow;
         this.generateUpdateBefore = generateUpdateBefore;
+        this.stateMetadataList = stateMetadataList;
     }
 
     @SuppressWarnings("unchecked")
@@ -158,9 +173,12 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
         final InternalTypeInfo<RowData> rowTypeInfo =
                 (InternalTypeInfo<RowData>) inputTransform.getOutputType();
         final TypeSerializer<RowData> rowSerializer =
-                rowTypeInfo.createSerializer(planner.getExecEnv().getConfig());
+                rowTypeInfo.createSerializer(
+                        planner.getExecEnv().getConfig().getSerializerConfig());
         final OneInputStreamOperator<RowData, RowData> operator;
 
+        long stateRetentionTime =
+                StateMetadata.getStateTtlForOneInputOperator(config, stateMetadataList);
         if (isRowtime) {
             operator =
                     new RowtimeDeduplicateOperatorTranslator(
@@ -169,7 +187,8 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                                     rowSerializer,
                                     inputRowType,
                                     keepLastRow,
-                                    generateUpdateBefore)
+                                    generateUpdateBefore,
+                                    stateRetentionTime)
                             .createDeduplicateOperator();
         } else {
             operator =
@@ -180,7 +199,8 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                                     rowSerializer,
                                     inputRowType,
                                     keepLastRow,
-                                    generateUpdateBefore)
+                                    generateUpdateBefore,
+                                    stateRetentionTime)
                             .createDeduplicateOperator();
         }
 
@@ -209,18 +229,21 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
         protected final TypeSerializer<RowData> typeSerializer;
         protected final boolean keepLastRow;
         protected final boolean generateUpdateBefore;
+        protected final long stateRetentionTime;
 
         protected DeduplicateOperatorTranslator(
                 ReadableConfig config,
                 InternalTypeInfo<RowData> rowTypeInfo,
                 TypeSerializer<RowData> typeSerializer,
                 boolean keepLastRow,
-                boolean generateUpdateBefore) {
+                boolean generateUpdateBefore,
+                long stateRetentionTime) {
             this.config = config;
             this.rowTypeInfo = rowTypeInfo;
             this.typeSerializer = typeSerializer;
             this.keepLastRow = keepLastRow;
             this.generateUpdateBefore = generateUpdateBefore;
+            this.stateRetentionTime = stateRetentionTime;
         }
 
         protected boolean generateInsert() {
@@ -235,8 +258,8 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
             return config.get(TABLE_EXEC_DEDUPLICATE_MINIBATCH_COMPACT_CHANGES_ENABLED);
         }
 
-        protected long getMinRetentionTime() {
-            return config.get(ExecutionConfigOptions.IDLE_STATE_RETENTION).toMillis();
+        protected boolean isAsyncStateEnabled() {
+            return config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED);
         }
 
         protected long getMiniBatchSize() {
@@ -267,8 +290,15 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                 TypeSerializer<RowData> typeSerializer,
                 RowType inputRowType,
                 boolean keepLastRow,
-                boolean generateUpdateBefore) {
-            super(config, rowTypeInfo, typeSerializer, keepLastRow, generateUpdateBefore);
+                boolean generateUpdateBefore,
+                long stateRetentionTime) {
+            super(
+                    config,
+                    rowTypeInfo,
+                    typeSerializer,
+                    keepLastRow,
+                    generateUpdateBefore,
+                    stateRetentionTime);
             this.inputRowType = inputRowType;
         }
 
@@ -289,7 +319,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                             new RowTimeMiniBatchLatestChangeDeduplicateFunction(
                                     rowTypeInfo,
                                     typeSerializer,
-                                    getMinRetentionTime(),
+                                    stateRetentionTime,
                                     rowtimeIndex,
                                     generateUpdateBefore,
                                     generateInsert(),
@@ -300,7 +330,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                             new RowTimeMiniBatchDeduplicateFunction(
                                     rowTypeInfo,
                                     typeSerializer,
-                                    getMinRetentionTime(),
+                                    stateRetentionTime,
                                     rowtimeIndex,
                                     generateUpdateBefore,
                                     generateInsert(),
@@ -308,15 +338,27 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                             trigger);
                 }
             } else {
-                RowTimeDeduplicateFunction processFunction =
-                        new RowTimeDeduplicateFunction(
-                                rowTypeInfo,
-                                getMinRetentionTime(),
-                                rowtimeIndex,
-                                generateUpdateBefore,
-                                generateInsert(),
-                                keepLastRow);
-                return new KeyedProcessOperator<>(processFunction);
+                if (isAsyncStateEnabled()) {
+                    AsyncStateRowTimeDeduplicateFunction processFunction =
+                            new AsyncStateRowTimeDeduplicateFunction(
+                                    rowTypeInfo,
+                                    stateRetentionTime,
+                                    rowtimeIndex,
+                                    generateUpdateBefore,
+                                    generateInsert(),
+                                    keepLastRow);
+                    return new AsyncKeyedProcessOperator<>(processFunction);
+                } else {
+                    RowTimeDeduplicateFunction processFunction =
+                            new RowTimeDeduplicateFunction(
+                                    rowTypeInfo,
+                                    stateRetentionTime,
+                                    rowtimeIndex,
+                                    generateUpdateBefore,
+                                    generateInsert(),
+                                    keepLastRow);
+                    return new KeyedProcessOperator<>(processFunction);
+                }
             }
         }
     }
@@ -333,8 +375,15 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                 TypeSerializer<RowData> typeSerializer,
                 RowType inputRowType,
                 boolean keepLastRow,
-                boolean generateUpdateBefore) {
-            super(config, rowTypeInfo, typeSerializer, keepLastRow, generateUpdateBefore);
+                boolean generateUpdateBefore,
+                long stateRetentionTime) {
+            super(
+                    config,
+                    rowTypeInfo,
+                    typeSerializer,
+                    keepLastRow,
+                    generateUpdateBefore,
+                    stateRetentionTime);
             generatedEqualiser =
                     new EqualiserCodeGenerator(inputRowType, classLoader)
                             .generateRecordEqualiser("DeduplicateRowEqualiser");
@@ -349,7 +398,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                             new ProcTimeMiniBatchDeduplicateKeepLastRowFunction(
                                     rowTypeInfo,
                                     typeSerializer,
-                                    getMinRetentionTime(),
+                                    stateRetentionTime,
                                     generateUpdateBefore,
                                     generateInsert(),
                                     true,
@@ -358,7 +407,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                 } else {
                     ProcTimeMiniBatchDeduplicateKeepFirstRowFunction processFunction =
                             new ProcTimeMiniBatchDeduplicateKeepFirstRowFunction(
-                                    typeSerializer, getMinRetentionTime());
+                                    typeSerializer, stateRetentionTime);
                     return new KeyedMapBundleOperator<>(processFunction, trigger);
                 }
             } else {
@@ -366,7 +415,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                     ProcTimeDeduplicateKeepLastRowFunction processFunction =
                             new ProcTimeDeduplicateKeepLastRowFunction(
                                     rowTypeInfo,
-                                    getMinRetentionTime(),
+                                    stateRetentionTime,
                                     generateUpdateBefore,
                                     generateInsert(),
                                     true,
@@ -374,7 +423,7 @@ public class StreamExecDeduplicate extends ExecNodeBase<RowData>
                     return new KeyedProcessOperator<>(processFunction);
                 } else {
                     ProcTimeDeduplicateKeepFirstRowFunction processFunction =
-                            new ProcTimeDeduplicateKeepFirstRowFunction(getMinRetentionTime());
+                            new ProcTimeDeduplicateKeepFirstRowFunction(stateRetentionTime);
                     return new KeyedProcessOperator<>(processFunction);
                 }
             }

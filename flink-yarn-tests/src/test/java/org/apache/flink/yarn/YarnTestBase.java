@@ -136,29 +136,29 @@ public abstract class YarnTestBase {
         // occurs if a TM disconnects from a JM because it is no longer hosting any slots
         Pattern.compile("has no more allocated slots for job"),
         // can happen if another process hasn't fully started yet
-        Pattern.compile("akka.actor.ActorNotFound: Actor not found for"),
+        Pattern.compile("org.apache.pekko.actor.ActorNotFound: Actor not found for"),
         // can happen if another process hasn't fully started yet
         Pattern.compile("RpcConnectionException: Could not connect to rpc endpoint under address"),
         // rest handler whose registration is logged on DEBUG level
         Pattern.compile("JobExceptionsHandler"),
-        Pattern.compile("akka\\.remote\\.RemoteTransportExceptionNoStackTrace"),
+        Pattern.compile("org\\.apache\\.pekko\\.remote\\.RemoteTransportExceptionNoStackTrace"),
         // workaround for annoying InterruptedException logging:
         // https://issues.apache.org/jira/browse/YARN-1022
         Pattern.compile("java\\.lang\\.InterruptedException"),
-        // very specific on purpose; whitelist meaningless exceptions that occur during akka
+        // very specific on purpose; whitelist meaningless exceptions that occur during Pekko
         // shutdown:
         Pattern.compile(
-                "Remote connection to \\[null\\] failed with java.net.ConnectException: Connection refused"),
+                "Remote connection to \\[.*\\] failed with java.net.ConnectException: Connection refused"),
         Pattern.compile(
-                "Remote connection to \\[null\\] failed with java.nio.channels.NotYetConnectedException"),
+                "Remote connection to \\[.*\\] failed with java.nio.channels.NotYetConnectedException"),
         Pattern.compile("java\\.io\\.IOException: Connection reset by peer"),
         Pattern.compile(
-                "Association with remote system \\[akka.tcp://flink@[^]]+\\] has failed, address is now gated for \\[50\\] ms. Reason: \\[Association failed with \\[akka.tcp://flink@[^]]+\\]\\] Caused by: \\[java.net.ConnectException: Connection refused: [^]]+\\]"),
+                "Association with remote system \\[pekko.tcp://flink@[^]]+\\] has failed, address is now gated for \\[50\\] ms. Reason: \\[Association failed with \\[pekko.tcp://flink@[^]]+\\]\\] Caused by: \\[java.net.ConnectException: Connection refused: [^]]+\\]"),
 
         // filter out expected ResourceManagerException caused by intended shutdown request
         Pattern.compile(YarnResourceManagerDriver.ERROR_MESSAGE_ON_SHUTDOWN_REQUEST),
 
-        // this can happen in Akka 2.4 on shutdown.
+        // this can happen in Pekko on shutdown.
         Pattern.compile(
                 "java\\.util\\.concurrent\\.RejectedExecutionException: Worker has already been shutdown"),
         Pattern.compile("org\\.apache\\.flink.util\\.FlinkException: Stopping JobMaster"),
@@ -166,11 +166,15 @@ public abstract class YarnTestBase {
                 "org\\.apache\\.flink.util\\.FlinkException: JobManager is shutting down\\."),
         Pattern.compile("lost the leadership."),
         Pattern.compile(
-                "akka.remote.transport.netty.NettyTransport.*Remote connection to \\[[^]]+\\] failed with java.io.IOException: Broken pipe"),
+                "org.apache.pekko.remote.transport.netty.NettyTransport.*Remote connection to \\[[^]]+\\] failed with java.io.IOException: Broken pipe"),
+        Pattern.compile(
+                "org.apache.pekko.remote.transport.netty.NettyTransport.*Remote connection to \\[.+\\] failed with java.net.SocketException: Connection reset"),
 
         // this can happen during cluster shutdown, if AMRMClient happens to be heartbeating
         Pattern.compile("Exception on heartbeat"),
         Pattern.compile("java\\.io\\.InterruptedIOException: Call interrupted"),
+        Pattern.compile(
+                "java\\.io\\.InterruptedIOException: Interrupted waiting to send RPC request to server"),
         Pattern.compile("java\\.lang\\.InterruptedException"),
 
         // this can happen if the hbase delegation token provider is not available
@@ -203,6 +207,7 @@ public abstract class YarnTestBase {
 
     protected static File yarnSiteXML = null;
     protected static File hdfsSiteXML = null;
+    protected static Map<String, String> env;
 
     private YarnClient yarnClient = null;
 
@@ -240,7 +245,7 @@ public abstract class YarnTestBase {
      *
      * @return a classpath suitable for running all YARN-launched JVMs
      */
-    private static String getYarnClasspath() {
+    protected static String getYarnClasspath() {
         final String start = "../flink-yarn-tests";
         try {
             File classPathFile =
@@ -400,7 +405,8 @@ public abstract class YarnTestBase {
             org.apache.flink.configuration.Configuration flinkConfiguration) {
         final YarnClusterDescriptor yarnClusterDescriptor =
                 createYarnClusterDescriptorWithoutLibDir(flinkConfiguration);
-        yarnClusterDescriptor.addShipFiles(Collections.singletonList(flinkLibFolder));
+        yarnClusterDescriptor.addShipFiles(
+                Collections.singletonList(new Path(flinkLibFolder.toURI())));
         return yarnClusterDescriptor;
     }
 
@@ -426,7 +432,9 @@ public abstract class YarnTestBase {
         private String[] names;
         private String excludeInPath = null;
 
-        /** @param names which have to be included in the filename. */
+        /**
+         * @param names which have to be included in the filename.
+         */
         public ContainsName(String[] names) {
             this.names = names;
         }
@@ -812,17 +820,20 @@ public abstract class YarnTestBase {
                 yarnCluster.start();
             }
 
-            Map<String, String> map = new HashMap<String, String>(System.getenv());
+            env = new HashMap<>(System.getenv());
 
             File flinkConfDirPath =
                     TestUtils.findFile(
-                            flinkDistRootDir, new ContainsName(new String[] {"flink-conf.yaml"}));
+                            flinkDistRootDir,
+                            new ContainsName(
+                                    new String[] {GlobalConfiguration.FLINK_CONF_FILENAME}));
             assertThat(flinkConfDirPath).isNotNull();
 
             final String confDirPath = flinkConfDirPath.getParentFile().getAbsolutePath();
             globalConfiguration = GlobalConfiguration.loadConfiguration(confDirPath);
             globalConfiguration.set(
-                    JobManagerOptions.RESOURCE_WAIT_TIMEOUT, Duration.ofSeconds(30));
+                    JobManagerOptions.SCHEDULER_SUBMISSION_RESOURCE_WAIT_TIMEOUT,
+                    Duration.ofSeconds(30));
 
             // copy conf dir to test temporary workspace location
             tempConfPathForSecureRun = tmp.toPath().resolve("conf").toFile();
@@ -831,7 +842,8 @@ public abstract class YarnTestBase {
             FileUtils.copyDirectory(new File(confDirPath), tempConfPathForSecureRun);
 
             BootstrapTools.writeConfiguration(
-                    globalConfiguration, new File(tempConfPathForSecureRun, "flink-conf.yaml"));
+                    globalConfiguration,
+                    new File(tempConfPathForSecureRun, GlobalConfiguration.FLINK_CONF_FILENAME));
 
             String configDir = tempConfPathForSecureRun.getAbsolutePath();
 
@@ -841,7 +853,7 @@ public abstract class YarnTestBase {
 
             assertThat(configDir).isNotNull();
 
-            map.put(ConfigConstants.ENV_FLINK_CONF_DIR, configDir);
+            env.put(ConfigConstants.ENV_FLINK_CONF_DIR, configDir);
 
             File targetTestClassesFolder = new File("target/test-classes");
             writeYarnSiteConfigXML(conf, targetTestClassesFolder);
@@ -851,12 +863,12 @@ public abstract class YarnTestBase {
                 setMiniDFSCluster(targetTestClassesFolder);
             }
 
-            map.put(
+            env.put(
                     "IN_TESTS",
                     "yes we are in tests"); // see YarnClusterDescriptor() for more infos
-            map.put("YARN_CONF_DIR", targetTestClassesFolder.getAbsolutePath());
-            map.put("MAX_LOG_FILE_NUMBER", "10");
-            CommonTestUtils.setEnv(map);
+            env.put("YARN_CONF_DIR", targetTestClassesFolder.getAbsolutePath());
+            env.put("MAX_LOG_FILE_NUMBER", "10");
+            CommonTestUtils.setEnv(env);
 
             assertThat(yarnCluster.getServiceState()).isEqualTo(Service.STATE.STARTED);
 

@@ -18,6 +18,7 @@
 
 package org.apache.flink.table.gateway.rest;
 
+import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.rest.messages.EmptyMessageParameters;
 import org.apache.flink.runtime.rest.messages.EmptyRequestBody;
 import org.apache.flink.table.gateway.api.operation.OperationHandle;
@@ -43,7 +44,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,17 +88,17 @@ class OperationRelatedITCase extends RestAPIITCaseBase {
         // Get the RUNNING status when an operation is submitted
         ids = submitOperation();
         status = getOperationStatus(ids);
-        assertThat(OperationStatus.RUNNING.toString()).isEqualTo(status);
+        assertThat(OperationStatus.RUNNING).hasToString(status);
         // Get the CANCELED status when an operation is canceled
         ids = submitOperation();
         status = cancelOperation(ids);
-        assertThat(OperationStatus.CANCELED.toString()).isEqualTo(status);
+        assertThat(OperationStatus.CANCELED).hasToString(status);
         status = getOperationStatus(ids);
-        assertThat(OperationStatus.CANCELED.toString()).isEqualTo(status);
+        assertThat(OperationStatus.CANCELED).hasToString(status);
         // Get the CLOSED status when an operation is closed
         ids = submitOperation();
         status = closeOperation(ids);
-        assertThat(OperationStatus.CLOSED.toString()).isEqualTo(status);
+        assertThat(OperationStatus.CLOSED).hasToString(status);
         SessionHandle sessionHandle = new SessionHandle(UUID.fromString(ids.get(0)));
         OperationHandle operationHandle = new OperationHandle(UUID.fromString(ids.get(1)));
         assertThatThrownBy(
@@ -119,6 +119,9 @@ class OperationRelatedITCase extends RestAPIITCaseBase {
         SessionHandle sessionHandle = new SessionHandle(UUID.fromString(sessionHandleId));
         assertThat(SQL_GATEWAY_SERVICE_EXTENSION.getSessionManager().getSession(sessionHandle))
                 .isNotNull();
+
+        OneShotLatch startLatch = new OneShotLatch();
+        Thread main = Thread.currentThread();
         OperationHandle operationHandle =
                 SQL_GATEWAY_SERVICE_EXTENSION
                         .getService()
@@ -126,11 +129,15 @@ class OperationRelatedITCase extends RestAPIITCaseBase {
                                 sessionHandle,
                                 () -> {
                                     try {
-                                        TimeUnit.SECONDS.sleep(10);
+                                        startLatch.trigger();
+                                        // keep operation in RUNNING state in response to cancel
+                                        // or close operations.
+                                        main.join();
                                     } catch (InterruptedException ignored) {
                                     }
                                     return NotReadyResult.INSTANCE;
                                 });
+        startLatch.await();
         assertThat(operationHandle).isNotNull();
         return Arrays.asList(sessionHandleId, operationHandle.getIdentifier().toString());
     }

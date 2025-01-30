@@ -18,7 +18,7 @@
 
 package org.apache.flink.table.catalog;
 
-import org.apache.flink.table.functions.UserDefinedFunction;
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.resource.ResourceUri;
 import org.apache.flink.util.StringUtils;
 
@@ -31,6 +31,7 @@ import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /** A catalog function implementation. */
+@Internal
 public class CatalogFunctionImpl implements CatalogFunction {
     private final String className; // Fully qualified class name of the function
     private final FunctionLanguage functionLanguage;
@@ -73,23 +74,6 @@ public class CatalogFunctionImpl implements CatalogFunction {
     @Override
     public Optional<String> getDetailedDescription() {
         return Optional.of("This is a user-defined function");
-    }
-
-    @Override
-    public boolean isGeneric() {
-        if (functionLanguage == FunctionLanguage.PYTHON) {
-            return true;
-        }
-        try {
-            ClassLoader cl = Thread.currentThread().getContextClassLoader();
-            Class c = Class.forName(className, true, cl);
-            if (UserDefinedFunction.class.isAssignableFrom(c)) {
-                return true;
-            }
-        } catch (ClassNotFoundException e) {
-            throw new RuntimeException(String.format("Can't resolve udf class %s", className), e);
-        }
-        return false;
     }
 
     @Override

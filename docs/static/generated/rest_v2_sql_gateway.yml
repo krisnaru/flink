@@ -6,7 +6,7 @@ info:
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0.html
-  version: v2/1.17-SNAPSHOT
+  version: v2/2.0-SNAPSHOT
 paths:
   /api_versions:
     get:
@@ -95,6 +95,11 @@ paths:
         required: true
         schema:
           $ref: '#/components/schemas/SessionHandle'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteStatementRequestBody'
       responses:
         "200":
           description: The request was successful.
@@ -205,7 +210,7 @@ paths:
           $ref: '#/components/schemas/OperationHandle'
       - name: token
         in: path
-        description: The OperationHandle that identifies a operation.
+        description: The token that identifies which batch of data to fetch.
         required: true
         schema:
           type: integer
@@ -299,6 +304,14 @@ components:
         logicalType:
           $ref: '#/components/schemas/LogicalType'
         name:
+          type: string
+    CompleteStatementRequestBody:
+      type: object
+      properties:
+        position:
+          type: integer
+          format: int32
+        statement:
           type: string
     CompleteStatementResponseBody:
       type: object

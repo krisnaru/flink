@@ -22,6 +22,7 @@ import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.DistributionPattern;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.scheduler.strategy.ConsumedPartitionGroup;
 import org.apache.flink.runtime.scheduler.strategy.ConsumerVertexGroup;
 import org.apache.flink.testutils.TestingUtils;
@@ -42,6 +43,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import static org.apache.flink.runtime.executiongraph.IntermediateResultPartitionTest.computeVertexParallelismStoreConsideringDynamicGraph;
 import static org.apache.flink.runtime.jobgraph.DistributionPattern.ALL_TO_ALL;
 import static org.apache.flink.runtime.jobgraph.DistributionPattern.POINTWISE;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -255,7 +257,7 @@ class EdgeManagerBuildUtilTest {
                         downstream, upstream, pattern);
         int actualMaxForDownstream = -1;
         for (ExecutionVertex ev : downstreamEJV.getTaskVertices()) {
-            assertThat(ev.getNumberOfInputs()).isEqualTo(1);
+            assertThat(ev.getNumberOfInputs()).isOne();
 
             int actual = ev.getConsumedPartitionGroup(0).size();
             if (actual > actualMaxForDownstream) {
@@ -286,7 +288,7 @@ class EdgeManagerBuildUtilTest {
         v1.setInvokableClass(AbstractInvokable.class);
         v2.setInvokableClass(AbstractInvokable.class);
 
-        v2.connectNewDataSetAsInput(v1, pattern, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(v2, v1, pattern, ResultPartitionType.PIPELINED);
 
         List<JobVertex> ordered = new ArrayList<>(Arrays.asList(v1, v2));
 
@@ -302,7 +304,8 @@ class EdgeManagerBuildUtilTest {
             eg = builder.build(EXECUTOR_RESOURCE.getExecutor());
         }
 
-        eg.attachJobGraph(ordered);
+        eg.attachJobGraph(
+                ordered, UnregisteredMetricGroups.createUnregisteredJobManagerJobMetricGroup());
         return eg;
     }
 }

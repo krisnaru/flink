@@ -20,18 +20,16 @@ package org.apache.flink.api.common.typeutils.base;
 
 import org.apache.flink.FlinkVersion;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.TypeSerializerMatchers;
+import org.apache.flink.api.common.typeutils.TypeSerializerConditions;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerUpgradeTestBase;
 
-import org.hamcrest.Matcher;
+import org.assertj.core.api.Condition;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.hamcrest.Matchers.is;
 
 /** A {@link TypeSerializerUpgradeTestBase} for {@link MapSerializerSnapshot}. */
 class MapSerializerUpgradeTest
@@ -39,17 +37,16 @@ class MapSerializerUpgradeTest
 
     private static final String SPEC_NAME = "map-serializer";
 
-    public Collection<TestSpecification<?, ?>> createTestSpecifications() throws Exception {
+    public Collection<TestSpecification<?, ?>> createTestSpecifications(FlinkVersion flinkVersion)
+            throws Exception {
 
         ArrayList<TestSpecification<?, ?>> testSpecifications = new ArrayList<>();
-        for (FlinkVersion flinkVersion : MIGRATION_VERSIONS) {
-            testSpecifications.add(
-                    new TestSpecification<>(
-                            SPEC_NAME,
-                            flinkVersion,
-                            MapSerializerSetup.class,
-                            MapSerializerVerifier.class));
-        }
+        testSpecifications.add(
+                new TestSpecification<>(
+                        SPEC_NAME,
+                        flinkVersion,
+                        MapSerializerSetup.class,
+                        MapSerializerVerifier.class));
         return testSpecifications;
     }
 
@@ -90,18 +87,18 @@ class MapSerializerUpgradeTest
         }
 
         @Override
-        public Matcher<Map<Integer, String>> testDataMatcher() {
+        public Condition<Map<Integer, String>> testDataCondition() {
             Map<Integer, String> data = new HashMap<>(3);
             for (int i = 0; i < 3; ++i) {
                 data.put(i, String.valueOf(i));
             }
-            return is(data);
+            return new Condition<>(data::equals, "is equal to " + data);
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<Map<Integer, String>>>
-                schemaCompatibilityMatcher(FlinkVersion version) {
-            return TypeSerializerMatchers.isCompatibleAsIs();
+        public Condition<TypeSerializerSchemaCompatibility<Map<Integer, String>>>
+                schemaCompatibilityCondition(FlinkVersion version) {
+            return TypeSerializerConditions.isCompatibleAsIs();
         }
     }
 }

@@ -43,6 +43,7 @@ import org.apache.flink.runtime.jobmaster.TestingLogicalSlotBuilder;
 import org.apache.flink.runtime.operators.BatchTask;
 import org.apache.flink.runtime.scheduler.strategy.ConsumedPartitionGroup;
 import org.apache.flink.runtime.testutils.DirectScheduledExecutorService;
+import org.apache.flink.runtime.util.NoOpGroupCache;
 import org.apache.flink.testutils.junit.utils.TempDirUtils;
 import org.apache.flink.util.function.FunctionUtils;
 
@@ -56,6 +57,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -74,7 +76,7 @@ class DefaultExecutionGraphDeploymentWithSmallBlobCacheSizeLimitTest
         Configuration config = new Configuration();
         // Always offload the serialized JobInformation, TaskInformation and cached
         // ShuffleDescriptors
-        config.setInteger(BlobServerOptions.OFFLOAD_MINSIZE, 0);
+        config.set(BlobServerOptions.OFFLOAD_MINSIZE, 0);
         blobServer =
                 new BlobServer(
                         config, TempDirUtils.newFolder(temporaryFolder), new VoidBlobStore());
@@ -119,7 +121,11 @@ class DefaultExecutionGraphDeploymentWithSmallBlobCacheSizeLimitTest
         taskManagerGateway.setSubmitConsumer(
                 FunctionUtils.uncheckedConsumer(
                         taskDeploymentDescriptor -> {
-                            taskDeploymentDescriptor.loadBigData(blobCache);
+                            taskDeploymentDescriptor.loadBigData(
+                                    blobCache,
+                                    new NoOpGroupCache<>(),
+                                    new NoOpGroupCache<>(),
+                                    new NoOpGroupCache<>());
                             tdds.offer(taskDeploymentDescriptor);
                         }));
 
@@ -164,11 +170,11 @@ class DefaultExecutionGraphDeploymentWithSmallBlobCacheSizeLimitTest
         }
 
         for (int i = 1; i < numberOfVertices; i++) {
-            vertices.get(i)
-                    .connectNewDataSetAsInput(
-                            vertices.get(i - 1),
-                            DistributionPattern.POINTWISE,
-                            ResultPartitionType.BLOCKING);
+            connectNewDataSetAsInput(
+                    vertices.get(i),
+                    vertices.get(i - 1),
+                    DistributionPattern.POINTWISE,
+                    ResultPartitionType.BLOCKING);
         }
 
         final JobGraph jobGraph =

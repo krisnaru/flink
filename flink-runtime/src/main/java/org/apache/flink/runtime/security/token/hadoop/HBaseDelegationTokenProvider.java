@@ -81,7 +81,7 @@ public class HBaseDelegationTokenProvider implements DelegationTokenProvider {
                 | IllegalAccessException
                 | ClassNotFoundException
                 | NoClassDefFoundError e) {
-            LOG.info(
+            LOG.debug(
                     "HBase is not available (not packaged with this application): {} : \"{}\".",
                     e.getClass().getSimpleName(),
                     e.getMessage());
@@ -116,7 +116,7 @@ public class HBaseDelegationTokenProvider implements DelegationTokenProvider {
             return false;
         }
         return hbaseConf.get("hbase.security.authentication").equals("kerberos")
-                && kerberosLoginProvider.isLoginPossible();
+                && kerberosLoginProvider.isLoginPossible(false);
     }
 
     @Override

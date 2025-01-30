@@ -18,6 +18,8 @@
 
 package org.apache.flink.runtime.scheduler.strategy;
 
+import org.apache.flink.runtime.execution.ExecutionState;
+
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -37,14 +39,15 @@ public class AllFinishedInputConsumableDecider implements InputConsumableDecider
                 executionVertex.getConsumedPartitionGroups()) {
 
             if (!consumableStatusCache.computeIfAbsent(
-                    consumedPartitionGroup, this::isConsumedPartitionGroupConsumable)) {
+                    consumedPartitionGroup, this::isConsumableBasedOnFinishedProducers)) {
                 return false;
             }
         }
         return true;
     }
 
-    private boolean isConsumedPartitionGroupConsumable(
+    @Override
+    public boolean isConsumableBasedOnFinishedProducers(
             final ConsumedPartitionGroup consumedPartitionGroup) {
         return consumedPartitionGroup.getNumberOfUnfinishedPartitions() == 0;
     }
@@ -59,7 +62,8 @@ public class AllFinishedInputConsumableDecider implements InputConsumableDecider
         @Override
         public InputConsumableDecider createInstance(
                 SchedulingTopology schedulingTopology,
-                Function<ExecutionVertexID, Boolean> scheduledVertexRetriever) {
+                Function<ExecutionVertexID, Boolean> scheduledVertexRetriever,
+                Function<ExecutionVertexID, ExecutionState> executionStateRetriever) {
             return new AllFinishedInputConsumableDecider();
         }
     }

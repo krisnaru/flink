@@ -22,9 +22,11 @@ import org.apache.flink.api.common.ArchivedExecutionConfig;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.runtime.accumulators.StringifiedAccumulatorResult;
+import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
 import org.apache.flink.runtime.executiongraph.ArchivedExecutionGraph;
 import org.apache.flink.runtime.executiongraph.ArchivedExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.ErrorInfo;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.util.OptionalFailure;
 import org.apache.flink.util.Preconditions;
@@ -54,6 +56,9 @@ public class ArchivedExecutionGraphBuilder {
     private ArchivedExecutionConfig archivedExecutionConfig;
     private boolean isStoppable;
     private Map<String, SerializedValue<OptionalFailure<Object>>> serializedUserAccumulators;
+    private CheckpointStatsSnapshot checkpointStatsSnapshot;
+    private String streamGraphJson;
+    private int pendingOperatorCounts = 0;
 
     public ArchivedExecutionGraphBuilder setJobID(JobID jobID) {
         this.jobID = jobID;
@@ -98,6 +103,11 @@ public class ArchivedExecutionGraphBuilder {
         return this;
     }
 
+    public ArchivedExecutionGraphBuilder setStreamGraphJson(String streamGraphJson) {
+        this.streamGraphJson = streamGraphJson;
+        return this;
+    }
+
     public ArchivedExecutionGraphBuilder setArchivedUserAccumulators(
             StringifiedAccumulatorResult[] archivedUserAccumulators) {
         this.archivedUserAccumulators = archivedUserAccumulators;
@@ -121,6 +131,17 @@ public class ArchivedExecutionGraphBuilder {
         return this;
     }
 
+    public ArchivedExecutionGraphBuilder setCheckpointStatsSnapshot(
+            CheckpointStatsSnapshot checkpointStatsSnapshot) {
+        this.checkpointStatsSnapshot = checkpointStatsSnapshot;
+        return this;
+    }
+
+    public ArchivedExecutionGraphBuilder setPendingOperatorCounts(int pendingOperatorCounts) {
+        this.pendingOperatorCounts = pendingOperatorCounts;
+        return this;
+    }
+
     public ArchivedExecutionGraph build() {
         JobID jobID = this.jobID != null ? this.jobID : new JobID();
         String jobName = this.jobName != null ? this.jobName : "job_" + RANDOM.nextInt();
@@ -138,6 +159,7 @@ public class ArchivedExecutionGraphBuilder {
                         : new ArrayList<>(tasks.values()),
                 stateTimestamps != null ? stateTimestamps : new long[JobStatus.values().length],
                 state != null ? state : JobStatus.FINISHED,
+                JobType.STREAMING,
                 failureCause,
                 jsonPlan != null
                         ? jsonPlan
@@ -157,10 +179,12 @@ public class ArchivedExecutionGraphBuilder {
                         : new ArchivedExecutionConfigBuilder().build(),
                 isStoppable,
                 null,
-                null,
+                checkpointStatsSnapshot,
                 "stateBackendName",
                 "checkpointStorageName",
                 TernaryBoolean.UNDEFINED,
-                "changelogStorageName");
+                "changelogStorageName",
+                streamGraphJson,
+                pendingOperatorCounts);
     }
 }

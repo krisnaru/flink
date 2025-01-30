@@ -18,37 +18,33 @@
 
 package org.apache.flink.test.checkpointing;
 
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.functions.ReduceFunction;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
-import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.changelog.fs.FsStateChangelogStorageFactory;
-import org.apache.flink.configuration.AkkaOptions;
+import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.configuration.MemorySize;
-import org.apache.flink.configuration.NettyShuffleEnvironmentOptions;
+import org.apache.flink.configuration.RpcOptions;
+import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
-import org.apache.flink.contrib.streaming.state.EmbeddedRocksDBStateBackend;
-import org.apache.flink.contrib.streaming.state.RocksDBOptions;
-import org.apache.flink.contrib.streaming.state.RocksDBStateBackend;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.runtime.state.AbstractStateBackend;
-import org.apache.flink.runtime.state.filesystem.FsStateBackend;
-import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.runtime.testutils.ZooKeeperTestUtils;
+import org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend;
+import org.apache.flink.state.rocksdb.RocksDBOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.functions.source.legacy.SourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.RichWindowFunction;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
-import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.streaming.util.RestartStrategyUtils;
 import org.apache.flink.test.checkpointing.utils.FailingSource;
 import org.apache.flink.test.checkpointing.utils.IntType;
 import org.apache.flink.test.checkpointing.utils.ValidatingSink;
@@ -104,11 +100,9 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
 
     @Rule public TestName name = new TestName();
 
-    private AbstractStateBackend stateBackend;
+    private Configuration configuration;
 
     public StateBackendEnum stateBackendEnum;
-
-    private final int buffersPerChannel;
 
     enum StateBackendEnum {
         MEM,
@@ -118,18 +112,16 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         ROCKSDB_INCREMENTAL_ZK,
     }
 
-    @Parameterized.Parameters(name = "statebackend type ={0}, buffersPerChannel = {1}")
+    @Parameterized.Parameters(name = "statebackend type ={0}")
     public static Collection<Object[]> parameter() {
         return Arrays.stream(StateBackendEnum.values())
-                .map((type) -> new Object[][] {{type, 0}, {type, 2}})
+                .map((type) -> new Object[][] {{type}})
                 .flatMap(Arrays::stream)
                 .collect(Collectors.toList());
     }
 
-    public EventTimeWindowCheckpointingITCase(
-            StateBackendEnum stateBackendEnum, int buffersPerChannel) {
+    public EventTimeWindowCheckpointingITCase(StateBackendEnum stateBackendEnum) {
         this.stateBackendEnum = stateBackendEnum;
-        this.buffersPerChannel = buffersPerChannel;
     }
 
     protected StateBackendEnum getStateBackend() {
@@ -139,7 +131,7 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
     protected final MiniClusterWithClientResource getMiniClusterResource() {
         return new MiniClusterWithClientResource(
                 new MiniClusterResourceConfiguration.Builder()
-                        .setConfiguration(getConfigurationSafe())
+                        .setConfiguration(configuration)
                         .setNumberTaskManagers(NUM_OF_TASK_MANAGERS)
                         .setNumberSlotsPerTaskManager(PARALLELISM / NUM_OF_TASK_MANAGERS)
                         .build());
@@ -167,17 +159,19 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         }
 
         Configuration config = createClusterConfig();
-        config.setInteger(
-                NettyShuffleEnvironmentOptions.NETWORK_BUFFERS_PER_CHANNEL, buffersPerChannel);
 
         switch (stateBackendEnum) {
             case MEM:
-                this.stateBackend = new MemoryStateBackend(MAX_MEM_STATE_SIZE);
+                config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
+                config.set(CheckpointingOptions.CHECKPOINT_STORAGE, "jobmanager");
                 break;
             case FILE:
                 {
                     final File backups = tempFolder.newFolder().getAbsoluteFile();
-                    this.stateBackend = new FsStateBackend(Path.fromLocalFile(backups));
+                    config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
+                    config.set(
+                            CheckpointingOptions.CHECKPOINTS_DIRECTORY,
+                            Path.fromLocalFile(backups).toUri().toString());
                     break;
                 }
             case ROCKSDB_FULL:
@@ -222,12 +216,17 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final File backups = tempFolder.newFolder().getAbsoluteFile();
         // we use the fs backend with small threshold here to test the behaviour with file
         // references, not self contained byte handles
-        RocksDBStateBackend rdb =
-                new RocksDBStateBackend(
-                        new FsStateBackend(Path.fromLocalFile(backups).toUri(), fileSizeThreshold),
-                        incrementalCheckpoints);
-        rdb.setDbStoragePath(rocksDb);
-        this.stateBackend = rdb;
+        config.set(StateBackendOptions.STATE_BACKEND, "rocksdb");
+        config.set(CheckpointingOptions.INCREMENTAL_CHECKPOINTS, incrementalCheckpoints);
+        config.set(
+                CheckpointingOptions.CHECKPOINTS_DIRECTORY,
+                Path.fromLocalFile(backups).toUri().toString());
+        if (fileSizeThreshold != -1) {
+            config.set(
+                    CheckpointingOptions.FS_SMALL_FILE_THRESHOLD,
+                    MemorySize.parse(fileSizeThreshold + "b"));
+        }
+        config.set(RocksDBOptions.LOCAL_DIRECTORIES, rocksDb);
     }
 
     protected Configuration createClusterConfig() throws IOException {
@@ -236,19 +235,19 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final File haDir = temporaryFolder.newFolder();
 
         Configuration config = new Configuration();
-        config.setString(AkkaOptions.FRAMESIZE, String.valueOf(MAX_MEM_STATE_SIZE) + "b");
+        config.set(RpcOptions.FRAMESIZE, String.valueOf(MAX_MEM_STATE_SIZE) + "b");
 
         if (zkServer != null) {
-            config.setString(HighAvailabilityOptions.HA_MODE, "ZOOKEEPER");
-            config.setString(
-                    HighAvailabilityOptions.HA_ZOOKEEPER_QUORUM, zkServer.getConnectString());
-            config.setString(HighAvailabilityOptions.HA_STORAGE_PATH, haDir.toURI().toString());
+            config.set(HighAvailabilityOptions.HA_MODE, "ZOOKEEPER");
+            config.set(HighAvailabilityOptions.HA_ZOOKEEPER_QUORUM, zkServer.getConnectString());
+            config.set(HighAvailabilityOptions.HA_STORAGE_PATH, haDir.toURI().toString());
         }
         return config;
     }
 
     @Before
     public void setupTestCluster() throws Exception {
+        configuration = getConfigurationSafe();
         miniClusterResource = getMiniClusterResource();
         miniClusterResource.before();
     }
@@ -281,11 +280,11 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final int numKeys = numKeys();
 
         try {
-            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(configuration);
             env.setParallelism(PARALLELISM);
             env.enableCheckpointing(100);
-            env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 0));
-            env.setStateBackend(this.stateBackend);
+            RestartStrategyUtils.configureFixedDelayRestartStrategy(env, 1, 0L);
             env.getConfig().setUseSnapshotCompression(true);
 
             env.addSource(
@@ -293,28 +292,30 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     new KeyedEventTimeGenerator(numKeys, windowSize),
                                     numElementsPerKey))
                     .rebalance()
-                    .keyBy(0)
-                    .window(TumblingEventTimeWindows.of(Time.milliseconds(windowSize)))
+                    .keyBy(x -> x.f0)
+                    .window(TumblingEventTimeWindows.of(Duration.ofMillis(windowSize)))
                     .apply(
                             new RichWindowFunction<
                                     Tuple2<Long, IntType>,
                                     Tuple4<Long, Long, Long, IntType>,
-                                    Tuple,
+                                    Long,
                                     TimeWindow>() {
 
                                 private boolean open = false;
 
                                 @Override
-                                public void open(Configuration parameters) {
+                                public void open(OpenContext openContext) {
                                     assertEquals(
                                             PARALLELISM,
-                                            getRuntimeContext().getNumberOfParallelSubtasks());
+                                            getRuntimeContext()
+                                                    .getTaskInfo()
+                                                    .getNumberOfParallelSubtasks());
                                     open = true;
                                 }
 
                                 @Override
                                 public void apply(
-                                        Tuple tuple,
+                                        Long l,
                                         TimeWindow window,
                                         Iterable<Tuple2<Long, IntType>> values,
                                         Collector<Tuple4<Long, Long, Long, IntType>> out) {
@@ -369,12 +370,12 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final int numKeys = numKeys();
 
         try {
-            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(configuration);
             env.setParallelism(PARALLELISM);
             env.setMaxParallelism(maxParallelism);
             env.enableCheckpointing(100);
-            env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 0));
-            env.setStateBackend(this.stateBackend);
+            RestartStrategyUtils.configureFixedDelayRestartStrategy(env, 1, 0L);
             env.getConfig().setUseSnapshotCompression(true);
 
             env.addSource(
@@ -382,13 +383,13 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     new KeyedEventTimeGenerator(numKeys, windowSize),
                                     numElementsPerKey))
                     .rebalance()
-                    .keyBy(0)
-                    .window(TumblingEventTimeWindows.of(Time.milliseconds(windowSize)))
+                    .keyBy(x -> x.f0)
+                    .window(TumblingEventTimeWindows.of(Duration.ofMillis(windowSize)))
                     .apply(
                             new RichWindowFunction<
                                     Tuple2<Long, IntType>,
                                     Tuple4<Long, Long, Long, IntType>,
-                                    Tuple,
+                                    Long,
                                     TimeWindow>() {
 
                                 private boolean open = false;
@@ -396,10 +397,12 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                 private ValueState<Integer> count;
 
                                 @Override
-                                public void open(Configuration parameters) {
+                                public void open(OpenContext openContext) {
                                     assertEquals(
                                             PARALLELISM,
-                                            getRuntimeContext().getNumberOfParallelSubtasks());
+                                            getRuntimeContext()
+                                                    .getTaskInfo()
+                                                    .getNumberOfParallelSubtasks());
                                     open = true;
                                     count =
                                             getRuntimeContext()
@@ -410,7 +413,7 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
 
                                 @Override
                                 public void apply(
-                                        Tuple tuple,
+                                        Long l,
                                         TimeWindow window,
                                         Iterable<Tuple2<Long, IntType>> values,
                                         Collector<Tuple4<Long, Long, Long, IntType>> out)
@@ -419,7 +422,7 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     // the window count state starts with the key, so that we get
                                     // different count results for each key
                                     if (count.value() == 0) {
-                                        count.update(tuple.<Long>getField(0).intValue());
+                                        count.update(l.intValue());
                                     }
 
                                     // validate that the function has been opened properly
@@ -428,7 +431,7 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     count.update(count.value() + 1);
                                     out.collect(
                                             new Tuple4<>(
-                                                    tuple.<Long>getField(0),
+                                                    l,
                                                     window.getStart(),
                                                     window.getEnd(),
                                                     new IntType(count.value())));
@@ -456,12 +459,12 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final int numKeys = numKeys();
 
         try {
-            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(configuration);
             env.setMaxParallelism(2 * PARALLELISM);
             env.setParallelism(PARALLELISM);
             env.enableCheckpointing(100);
-            env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 0));
-            env.setStateBackend(this.stateBackend);
+            RestartStrategyUtils.configureFixedDelayRestartStrategy(env, 1, 0L);
             env.getConfig().setUseSnapshotCompression(true);
 
             env.addSource(
@@ -469,30 +472,32 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     new KeyedEventTimeGenerator(numKeys, windowSlide),
                                     numElementsPerKey))
                     .rebalance()
-                    .keyBy(0)
+                    .keyBy(x -> x.f0)
                     .window(
                             SlidingEventTimeWindows.of(
-                                    Time.milliseconds(windowSize), Time.milliseconds(windowSlide)))
+                                    Duration.ofMillis(windowSize), Duration.ofMillis(windowSlide)))
                     .apply(
                             new RichWindowFunction<
                                     Tuple2<Long, IntType>,
                                     Tuple4<Long, Long, Long, IntType>,
-                                    Tuple,
+                                    Long,
                                     TimeWindow>() {
 
                                 private boolean open = false;
 
                                 @Override
-                                public void open(Configuration parameters) {
+                                public void open(OpenContext openContext) {
                                     assertEquals(
                                             PARALLELISM,
-                                            getRuntimeContext().getNumberOfParallelSubtasks());
+                                            getRuntimeContext()
+                                                    .getTaskInfo()
+                                                    .getNumberOfParallelSubtasks());
                                     open = true;
                                 }
 
                                 @Override
                                 public void apply(
-                                        Tuple tuple,
+                                        Long l,
                                         TimeWindow window,
                                         Iterable<Tuple2<Long, IntType>> values,
                                         Collector<Tuple4<Long, Long, Long, IntType>> out) {
@@ -537,11 +542,11 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final int numKeys = numKeys();
 
         try {
-            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(configuration);
             env.setParallelism(PARALLELISM);
             env.enableCheckpointing(100);
-            env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 0));
-            env.setStateBackend(this.stateBackend);
+            RestartStrategyUtils.configureFixedDelayRestartStrategy(env, 1, 0L);
             env.getConfig().setUseSnapshotCompression(true);
 
             env.addSource(
@@ -549,8 +554,8 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     new KeyedEventTimeGenerator(numKeys, windowSize),
                                     numElementsPerKey))
                     .rebalance()
-                    .keyBy(0)
-                    .window(TumblingEventTimeWindows.of(Time.milliseconds(windowSize)))
+                    .keyBy(x -> x.f0)
+                    .window(TumblingEventTimeWindows.of(Duration.ofMillis(windowSize)))
                     .reduce(
                             new ReduceFunction<Tuple2<Long, IntType>>() {
 
@@ -563,22 +568,24 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                             new RichWindowFunction<
                                     Tuple2<Long, IntType>,
                                     Tuple4<Long, Long, Long, IntType>,
-                                    Tuple,
+                                    Long,
                                     TimeWindow>() {
 
                                 private boolean open = false;
 
                                 @Override
-                                public void open(Configuration parameters) {
+                                public void open(OpenContext openContext) {
                                     assertEquals(
                                             PARALLELISM,
-                                            getRuntimeContext().getNumberOfParallelSubtasks());
+                                            getRuntimeContext()
+                                                    .getTaskInfo()
+                                                    .getNumberOfParallelSubtasks());
                                     open = true;
                                 }
 
                                 @Override
                                 public void apply(
-                                        Tuple tuple,
+                                        Long l,
                                         TimeWindow window,
                                         Iterable<Tuple2<Long, IntType>> input,
                                         Collector<Tuple4<Long, Long, Long, IntType>> out) {
@@ -619,11 +626,11 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
         final int numKeys = numKeys();
 
         try {
-            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            StreamExecutionEnvironment env =
+                    StreamExecutionEnvironment.getExecutionEnvironment(configuration);
             env.setParallelism(PARALLELISM);
             env.enableCheckpointing(100);
-            env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 0));
-            env.setStateBackend(this.stateBackend);
+            RestartStrategyUtils.configureFixedDelayRestartStrategy(env, 1, 0L);
             env.getConfig().setUseSnapshotCompression(true);
 
             env.addSource(
@@ -631,10 +638,10 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                                     new KeyedEventTimeGenerator(numKeys, windowSlide),
                                     numElementsPerKey))
                     .rebalance()
-                    .keyBy(0)
+                    .keyBy(x -> x.f0)
                     .window(
                             SlidingEventTimeWindows.of(
-                                    Time.milliseconds(windowSize), Time.milliseconds(windowSlide)))
+                                    Duration.ofMillis(windowSize), Duration.ofMillis(windowSlide)))
                     .reduce(
                             new ReduceFunction<Tuple2<Long, IntType>>() {
 
@@ -649,22 +656,24 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
                             new RichWindowFunction<
                                     Tuple2<Long, IntType>,
                                     Tuple4<Long, Long, Long, IntType>,
-                                    Tuple,
+                                    Long,
                                     TimeWindow>() {
 
                                 private boolean open = false;
 
                                 @Override
-                                public void open(Configuration parameters) {
+                                public void open(OpenContext openContext) {
                                     assertEquals(
                                             PARALLELISM,
-                                            getRuntimeContext().getNumberOfParallelSubtasks());
+                                            getRuntimeContext()
+                                                    .getTaskInfo()
+                                                    .getNumberOfParallelSubtasks());
                                     open = true;
                                 }
 
                                 @Override
                                 public void apply(
-                                        Tuple tuple,
+                                        Long l,
                                         TimeWindow window,
                                         Iterable<Tuple2<Long, IntType>> input,
                                         Collector<Tuple4<Long, Long, Long, IntType>> out) {

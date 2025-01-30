@@ -19,18 +19,21 @@
 package org.apache.flink.cep.nfa;
 
 import org.apache.flink.cep.Event;
+import org.apache.flink.cep.nfa.aftermatch.AfterMatchSkipStrategy;
 import org.apache.flink.cep.pattern.Pattern;
 import org.apache.flink.cep.pattern.WithinType;
 import org.apache.flink.cep.pattern.conditions.SimpleCondition;
-import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.cep.utils.NFATestHarness;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.util.TestLogger;
 
-import org.apache.flink.shaded.guava30.com.google.common.collect.Lists;
+import org.apache.flink.shaded.guava32.com.google.common.collect.Lists;
 
 import org.junit.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.flink.cep.utils.NFATestUtilities.comparePatterns;
@@ -1015,7 +1018,7 @@ public class NotPatternITCase extends TestLogger {
                         .where(SimpleCondition.of(value -> value.getName().equals("a")))
                         .notFollowedBy("b")
                         .where(SimpleCondition.of(value -> value.getName().equals("b")))
-                        .within(Time.milliseconds(3), withinType);
+                        .within(Duration.ofMillis(3), withinType);
 
         NFA<Event> nfa = compile(pattern, false);
 
@@ -1054,7 +1057,7 @@ public class NotPatternITCase extends TestLogger {
                         .followedBy("c")
                         .where(SimpleCondition.of(value -> value.getName().equals("c")))
                         .times(0, 2)
-                        .within(Time.milliseconds(3));
+                        .within(Duration.ofMillis(3));
 
         NFA<Event> nfa = compile(pattern, false);
 
@@ -1069,5 +1072,43 @@ public class NotPatternITCase extends TestLogger {
                         Lists.newArrayList(a2, c1, c2),
                         Lists.newArrayList(a3),
                         Lists.newArrayList(a3, c3)));
+    }
+
+    @Test
+    public void testNotFollowedByWithinAtEndAfterMatch() throws Exception {
+        List<StreamRecord<Event>> inputEvents = new ArrayList<>();
+
+        Event a1 = new Event(40, "a", 1.0);
+        Event a2 = new Event(41, "a", 2.0);
+        Event a3 = new Event(42, "a", 3.0);
+        Event c1 = new Event(43, "c", 4.0);
+        Event c2 = new Event(44, "c", 5.0);
+
+        inputEvents.add(new StreamRecord<>(a1, 1));
+        inputEvents.add(new StreamRecord<>(a2, 2));
+        inputEvents.add(new StreamRecord<>(a3, 3));
+        inputEvents.add(new StreamRecord<>(c1, 4));
+        inputEvents.add(new StreamRecord<>(c2, 10));
+
+        Pattern<Event, ?> pattern =
+                Pattern.<Event>begin("a", AfterMatchSkipStrategy.skipPastLastEvent())
+                        .where(SimpleCondition.of(value -> value.getName().equals("a")))
+                        .oneOrMore()
+                        .allowCombinations()
+                        .followedBy("c")
+                        .where(SimpleCondition.of(value -> value.getName().equals("c")))
+                        .notFollowedBy("b")
+                        .where(SimpleCondition.of(value -> value.getName().equals("b")))
+                        .within(Duration.ofMillis(5));
+
+        NFA<Event> nfa = compile(pattern, false);
+
+        NFATestHarness harness =
+                NFATestHarness.forNFA(nfa)
+                        .withAfterMatchSkipStrategy(AfterMatchSkipStrategy.skipPastLastEvent())
+                        .build();
+        final List<List<Event>> matches = harness.feedRecords(inputEvents);
+
+        comparePatterns(matches, Collections.singletonList(Lists.newArrayList(a1, a2, a3, c1)));
     }
 }

@@ -18,7 +18,7 @@
 
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { EMPTY, forkJoin, Observable } from 'rxjs';
+import { EMPTY, forkJoin, mergeMap, Observable } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 
 import {
@@ -42,8 +42,10 @@ import {
   TaskStatus,
   UserAccumulators,
   VerticesLink,
-  JobVertexSubTaskDetail
+  JobVertexSubTaskDetail,
+  NodesItemLink
 } from '@flink-runtime-web/interfaces';
+import { JobResourceRequirements } from '@flink-runtime-web/interfaces/job-resource-requirements';
 
 import { ConfigService } from './config.service';
 
@@ -70,6 +72,7 @@ export class JobService {
             job.tasks[upperCaseKey] = job.tasks[key as keyof TaskStatus];
             delete job.tasks[key as keyof TaskStatus];
           }
+          job.tasks['PENDING'] = job['pending-operators'] || 0;
           job.completed = ['FINISHED', 'FAILED', 'CANCELED'].indexOf(job.state) > -1;
         });
         return data.jobs || [];
@@ -175,6 +178,35 @@ export class JobService {
     );
   }
 
+  public loadJobResourceRequirements(jobId: string): Observable<JobResourceRequirements> {
+    return this.httpClient.get<JobResourceRequirements>(
+      `${this.configService.BASE_URL}/jobs/${jobId}/resource-requirements`
+    );
+  }
+
+  public changeDesiredParallelism(jobId: string, desiredParallelism: Map<string, number>): Observable<void> {
+    return this.loadJobResourceRequirements(jobId)
+      .pipe(
+        map(jobResourceRequirements => {
+          for (const vertexId in jobResourceRequirements) {
+            const newUpperBound = desiredParallelism.get(vertexId);
+            if (newUpperBound != undefined) {
+              jobResourceRequirements[vertexId].parallelism.upperBound = newUpperBound;
+            }
+          }
+          return jobResourceRequirements;
+        })
+      )
+      .pipe(
+        mergeMap(jobResourceRequirements => {
+          return this.httpClient.put<void>(
+            `${this.configService.BASE_URL}/jobs/${jobId}/resource-requirements`,
+            jobResourceRequirements
+          );
+        })
+      );
+  }
+
   /** nodes to nodes links in order to generate graph */
   private convertJob(job: JobDetail): JobDetailCorrect {
     const links: VerticesLink[] = [];
@@ -187,7 +219,8 @@ export class JobService {
         }
         return {
           ...node,
-          detail
+          detail,
+          job_vertex_id: node.id
         };
       });
       nodes.forEach(node => {
@@ -200,12 +233,34 @@ export class JobService {
       const listOfVerticesId = job.vertices.map(item => item.id);
       nodes.sort((pre, next) => listOfVerticesId.indexOf(pre.id) - listOfVerticesId.indexOf(next.id));
     }
+    // initializing stream graph
+    const streamLinks: NodesItemLink[] = [];
+    let streamNodes: NodesItemCorrect[] = [];
+    if (job['stream-graph']) {
+      // update pending status counts
+      job['status-counts']['PENDING'] = job['pending-operators'];
+      streamNodes = job['stream-graph'].nodes;
+      streamNodes.forEach(node => {
+        if (node.inputs && node.inputs.length) {
+          node.inputs.forEach(input => {
+            streamLinks.push({
+              ...input,
+              source: input.id,
+              target: node.id,
+              id: `${input.id}-${node.id}`
+            });
+          });
+        }
+      });
+    }
     return {
       ...job,
       plan: {
         ...job.plan,
         nodes,
-        links
+        links,
+        streamNodes,
+        streamLinks
       }
     };
   }

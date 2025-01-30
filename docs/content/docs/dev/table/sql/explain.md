@@ -380,7 +380,7 @@ If `GroupAggregate` is detected and can be optimized to the local-global aggrega
 SET 'table.exec.mini-batch.enabled' = 'true';
 SET 'table.exec.mini-batch.allow-latency' = '5s';
 SET 'table.exec.mini-batch.size' = '200';
-SET 'table.optimizer.agg-phase-strategy' = 'OHE_PHASE';
+SET 'table.optimizer.agg-phase-strategy' = 'ONE_PHASE';
 
 CREATE TABLE MyTable (
   a BIGINT,
@@ -519,7 +519,7 @@ Specify `JSON_EXECUTION_PLAN` will inform the optimizer to attach the json-forma
 EXPLAIN [([ExplainDetail[, ExplainDetail]*]) | PLAN FOR] <query_statement_or_insert_statement_or_statement_set>
 
 statement_set:
-EXECUTE STATEMENT SET
+STATEMENT SET
 BEGIN
 insert_statement;
 ...

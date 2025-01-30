@@ -21,7 +21,6 @@ package org.apache.flink.runtime.executiongraph;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.Archiveable;
 import org.apache.flink.api.common.accumulators.Accumulator;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.accumulators.StringifiedAccumulatorResult;
@@ -52,6 +51,7 @@ import org.apache.flink.runtime.shuffle.ShuffleDescriptor;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
 import org.apache.flink.runtime.taskexecutor.TaskExecutorOperatorEventGateway;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
+import org.apache.flink.util.CollectionUtil;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.OptionalFailure;
@@ -62,11 +62,11 @@ import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -127,7 +127,7 @@ public class Execution
     private final ExecutionVertex vertex;
 
     /** The unique ID marking the specific execution instant of the task. */
-    private final ExecutionAttemptID attemptId;
+    private ExecutionAttemptID attemptId;
 
     /**
      * The timestamps when state transitions occurred, indexed by {@link ExecutionState#ordinal()}.
@@ -140,7 +140,7 @@ public class Execution
      */
     private final long[] stateEndTimestamps;
 
-    private final Time rpcTimeout;
+    private final Duration rpcTimeout;
 
     private final Collection<PartitionInfo> partitionInfos;
 
@@ -206,7 +206,7 @@ public class Execution
             ExecutionVertex vertex,
             int attemptNumber,
             long startTimestamp,
-            Time rpcTimeout) {
+            Duration rpcTimeout) {
 
         this.executor = checkNotNull(executor);
         this.vertex = checkNotNull(vertex);
@@ -453,6 +453,40 @@ public class Execution
                 });
     }
 
+    private void recoverAttempt(ExecutionAttemptID newId) {
+        if (!this.attemptId.equals(newId)) {
+            getVertex().getExecutionGraphAccessor().deregisterExecution(this);
+            this.attemptId = newId;
+            getVertex().getExecutionGraphAccessor().registerExecution(this);
+        }
+    }
+
+    /** Recover the execution attempt status after JM failover. */
+    public void recoverExecution(
+            ExecutionAttemptID attemptId,
+            TaskManagerLocation location,
+            Map<String, Accumulator<?, ?>> userAccumulators,
+            IOMetrics metrics) {
+        recoverAttempt(attemptId);
+        taskManagerLocationFuture.complete(location);
+
+        try {
+            transitionState(this.state, FINISHED);
+            finishPartitionsAndUpdateConsumers();
+            updateAccumulatorsAndMetrics(userAccumulators, metrics);
+            releaseAssignedResource(null);
+            vertex.getExecutionGraphAccessor().deregisterExecution(this);
+        } finally {
+            vertex.executionFinished(this);
+        }
+    }
+
+    public void recoverProducedPartitions(
+            Map<IntermediateResultPartitionID, ResultPartitionDeploymentDescriptor>
+                    producedPartitions) {
+        this.producedPartitions = checkNotNull(producedPartitions);
+    }
+
     private static CompletableFuture<
                     Map<IntermediateResultPartitionID, ResultPartitionDeploymentDescriptor>>
             registerProducedPartitions(
@@ -469,7 +503,6 @@ public class Execution
 
         for (IntermediateResultPartition partition : partitions) {
             PartitionDescriptor partitionDescriptor = PartitionDescriptor.from(partition);
-            int maxParallelism = getPartitionMaxParallelism(partition);
             CompletableFuture<? extends ShuffleDescriptor> shuffleDescriptorFuture =
                     vertex.getExecutionGraphAccessor()
                             .getShuffleMaster()
@@ -479,10 +512,8 @@ public class Execution
             CompletableFuture<ResultPartitionDeploymentDescriptor> partitionRegistration =
                     shuffleDescriptorFuture.thenApply(
                             shuffleDescriptor ->
-                                    new ResultPartitionDeploymentDescriptor(
-                                            partitionDescriptor,
-                                            shuffleDescriptor,
-                                            maxParallelism));
+                                    createResultPartitionDeploymentDescriptor(
+                                            partitionDescriptor, partition, shuffleDescriptor));
             partitionRegistrations.add(partitionRegistration);
         }
 
@@ -490,7 +521,9 @@ public class Execution
                 .thenApply(
                         rpdds -> {
                             Map<IntermediateResultPartitionID, ResultPartitionDeploymentDescriptor>
-                                    producedPartitions = new LinkedHashMap<>(partitions.size());
+                                    producedPartitions =
+                                            CollectionUtil.newLinkedHashMapWithExpectedSize(
+                                                    partitions.size());
                             rpdds.forEach(
                                     rpdd -> producedPartitions.put(rpdd.getPartitionId(), rpdd));
                             return producedPartitions;
@@ -499,6 +532,21 @@ public class Execution
 
     private static int getPartitionMaxParallelism(IntermediateResultPartition partition) {
         return partition.getIntermediateResult().getConsumersMaxParallelism();
+    }
+
+    public static ResultPartitionDeploymentDescriptor createResultPartitionDeploymentDescriptor(
+            IntermediateResultPartition partition, ShuffleDescriptor shuffleDescriptor) {
+        PartitionDescriptor partitionDescriptor = PartitionDescriptor.from(partition);
+        return createResultPartitionDeploymentDescriptor(
+                partitionDescriptor, partition, shuffleDescriptor);
+    }
+
+    private static ResultPartitionDeploymentDescriptor createResultPartitionDeploymentDescriptor(
+            PartitionDescriptor partitionDescriptor,
+            IntermediateResultPartition partition,
+            ShuffleDescriptor shuffleDescriptor) {
+        return new ResultPartitionDeploymentDescriptor(
+                partitionDescriptor, shuffleDescriptor, getPartitionMaxParallelism(partition));
     }
 
     /**
@@ -568,8 +616,10 @@ public class Execution
                     slot.getAllocationId());
 
             final TaskDeploymentDescriptor deployment =
-                    TaskDeploymentDescriptorFactory.fromExecution(this)
+                    vertex.getExecutionGraphAccessor()
+                            .getTaskDeploymentDescriptorFactory()
                             .createDeploymentDescriptor(
+                                    this,
                                     slot.getAllocationId(),
                                     taskRestore,
                                     producedPartitions.values());
@@ -1186,7 +1236,7 @@ public class Execution
         }
     }
 
-    boolean switchToRecovering() {
+    boolean switchToInitializing() {
         if (switchTo(DEPLOYING, INITIALIZING)) {
             sendPartitionInfos();
             return true;

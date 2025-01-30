@@ -66,6 +66,8 @@ Classes for catalog:
       from and to a catalog.
     - :class:`catalog.HiveCatalog`
       Responsible for reading and writing metadata stored in Hive.
+    - :class:`catalog.CatalogDescriptor`
+      Responsible for describing a Catalog with the catalog name and configuration.
 
 Classes to define source & sink:
 
@@ -118,8 +120,6 @@ from pyflink.table.expression import Expression
 from pyflink.table.module import Module, ModuleEntry
 from pyflink.table.result_kind import ResultKind
 from pyflink.table.schema import Schema
-from pyflink.table.sinks import CsvTableSink, TableSink, WriteMode
-from pyflink.table.sources import CsvTableSource, TableSource
 from pyflink.table.sql_dialect import SqlDialect
 from pyflink.table.statement_set import StatementSet
 from pyflink.table.table import GroupWindowedTable, GroupedTable, OverWindowedTable, Table, \
@@ -167,10 +167,5 @@ __all__ = [
     'RowKind',
     'ChangelogMode',
     'ExplainDetail',
-    'TableSource',
-    'TableSink',
-    'CsvTableSource',
-    'CsvTableSink',
-    'WriteMode',
     'ResultKind'
 ]

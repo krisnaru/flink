@@ -18,7 +18,6 @@
 package org.apache.flink.runtime.resourcemanager.slotmanager;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.blocklist.BlockedTaskManagerChecker;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
@@ -33,6 +32,7 @@ import org.apache.flink.runtime.resourcemanager.registration.TaskExecutorConnect
 import org.apache.flink.runtime.slots.ResourceRequirement;
 import org.apache.flink.runtime.slots.ResourceRequirements;
 import org.apache.flink.runtime.taskexecutor.SlotStatus;
+import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGateway;
 import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGatewayBuilder;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
@@ -54,7 +54,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.apache.flink.core.testutils.FlinkAssertions.assertThatFuture;
 
 /** Base class for the tests of {@link FineGrainedSlotManager}. */
 abstract class FineGrainedSlotManagerTestBase {
@@ -80,12 +80,13 @@ abstract class FineGrainedSlotManagerTestBase {
             SlotManagerUtils.generateDefaultSlotResourceProfile(
                     DEFAULT_WORKER_RESOURCE_SPEC, DEFAULT_NUM_SLOTS_PER_WORKER);
 
-    protected abstract Optional<ResourceAllocationStrategy> getResourceAllocationStrategy();
+    protected abstract Optional<ResourceAllocationStrategy> getResourceAllocationStrategy(
+            SlotManagerConfiguration slotManagerConfiguration);
 
     static SlotStatus createAllocatedSlotStatus(
-            AllocationID allocationID, ResourceProfile resourceProfile) {
+            JobID jobId, AllocationID allocationID, ResourceProfile resourceProfile) {
         return new SlotStatus(
-                new SlotID(ResourceID.generate(), 0), resourceProfile, new JobID(), allocationID);
+                new SlotID(ResourceID.generate(), 0), resourceProfile, jobId, allocationID);
     }
 
     static int getTotalResourceCount(Collection<ResourceRequirement> resources) {
@@ -124,18 +125,21 @@ abstract class FineGrainedSlotManagerTestBase {
                 new TestingTaskExecutorGatewayBuilder().createTestingTaskExecutorGateway());
     }
 
+    static TaskExecutorConnection createTaskExecutorConnection(
+            TestingTaskExecutorGateway taskExecutorGateway) {
+        return new TaskExecutorConnection(ResourceID.generate(), taskExecutorGateway);
+    }
+
     static <T> T assertFutureCompleteAndReturn(CompletableFuture<T> completableFuture)
             throws Exception {
         return completableFuture.get(FUTURE_TIMEOUT_SECOND, TimeUnit.SECONDS);
     }
 
-    static void assertFutureNotComplete(CompletableFuture<?> completableFuture) throws Exception {
-        assertThatThrownBy(
-                        () ->
-                                completableFuture.get(
-                                        FUTURE_EXPECT_TIMEOUT_MS, TimeUnit.MILLISECONDS),
-                        "Expected to fail with a timeout.")
-                .isInstanceOf(TimeoutException.class);
+    static void assertFutureNotComplete(CompletableFuture<?> completableFuture) {
+        assertThatFuture(completableFuture)
+                .withFailMessage("Expected to fail with a timeout.")
+                .failsWithin(FUTURE_EXPECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .withThrowableOfType(TimeoutException.class);
     }
 
     /** This class provides a self-contained context for each test case. */
@@ -144,7 +148,7 @@ abstract class FineGrainedSlotManagerTestBase {
         private final ResourceTracker resourceTracker = new DefaultResourceTracker();
         private final TaskManagerTracker taskManagerTracker = new FineGrainedTaskManagerTracker();
         private final SlotStatusSyncer slotStatusSyncer =
-                new DefaultSlotStatusSyncer(Time.seconds(10L));
+                new DefaultSlotStatusSyncer(Duration.ofSeconds(10L));
         private SlotManagerMetricGroup slotManagerMetricGroup =
                 UnregisteredMetricGroups.createUnregisteredSlotManagerMetricGroup();
         private BlockedTaskManagerChecker blockedTaskManagerChecker = resourceID -> false;
@@ -152,7 +156,6 @@ abstract class FineGrainedSlotManagerTestBase {
                 new ScheduledExecutorServiceAdapter(EXECUTOR_RESOURCE.getExecutor());
         private final Executor mainThreadExecutor = EXECUTOR_RESOURCE.getExecutor();
         private FineGrainedSlotManager slotManager;
-        private Duration requirementCheckDelay = Duration.ZERO;
 
         final TestingResourceAllocationStrategy.Builder resourceAllocationStrategyBuilder =
                 TestingResourceAllocationStrategy.newBuilder();
@@ -181,10 +184,6 @@ abstract class FineGrainedSlotManagerTestBase {
             return resourceManagerId;
         }
 
-        public void setRequirementCheckDelay(Duration requirementCheckDelay) {
-            this.requirementCheckDelay = requirementCheckDelay;
-        }
-
         public void setSlotManagerMetricGroup(SlotManagerMetricGroup slotManagerMetricGroup) {
             this.slotManagerMetricGroup = slotManagerMetricGroup;
         }
@@ -209,16 +208,19 @@ abstract class FineGrainedSlotManagerTestBase {
         }
 
         protected final void runTest(RunnableWithException testMethod) throws Exception {
+            SlotManagerConfiguration configuration = slotManagerConfigurationBuilder.build();
             slotManager =
-                    new FineGrainedSlotManager(
-                            scheduledExecutor,
-                            slotManagerConfigurationBuilder.build(),
-                            slotManagerMetricGroup,
-                            resourceTracker,
-                            taskManagerTracker,
-                            slotStatusSyncer,
-                            getResourceAllocationStrategy()
-                                    .orElse(resourceAllocationStrategyBuilder.build()));
+                    FineGrainedSlotManagerBuilder.newBuilder(scheduledExecutor)
+                            .setSlotManagerConfiguration(configuration)
+                            .setSlotManagerMetricGroup(slotManagerMetricGroup)
+                            .setResourceTracker(resourceTracker)
+                            .setTaskManagerTracker(taskManagerTracker)
+                            .setSlotStatusSyncer(slotStatusSyncer)
+                            .setResourceAllocationStrategy(
+                                    getResourceAllocationStrategy(configuration)
+                                            .orElse(resourceAllocationStrategyBuilder.build()))
+                            .build();
+
             runInMainThreadAndWait(
                     () ->
                             slotManager.start(

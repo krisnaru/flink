@@ -50,6 +50,17 @@ class DefaultInputConsumableDeciderTest {
         DefaultInputConsumableDecider inputConsumableDecider =
                 createDefaultInputConsumableDecider(Collections.emptySet(), topology);
 
+        consumer.forEach(
+                vertex ->
+                        vertex.getConsumedPartitionGroups()
+                                .forEach(
+                                        group ->
+                                                assertThat(
+                                                                inputConsumableDecider
+                                                                        .isConsumableBasedOnFinishedProducers(
+                                                                                group))
+                                                        .isFalse()));
+
         assertThat(
                         inputConsumableDecider.isInputConsumable(
                                 consumer.get(0), Collections.emptySet(), new HashMap<>()))
@@ -77,6 +88,17 @@ class DefaultInputConsumableDeciderTest {
 
         DefaultInputConsumableDecider inputConsumableDecider =
                 createDefaultInputConsumableDecider(Collections.emptySet(), topology);
+
+        consumer.forEach(
+                vertex ->
+                        vertex.getConsumedPartitionGroups()
+                                .forEach(
+                                        group ->
+                                                assertThat(
+                                                                inputConsumableDecider
+                                                                        .isConsumableBasedOnFinishedProducers(
+                                                                                group))
+                                                        .isTrue()));
 
         assertThat(
                         inputConsumableDecider.isInputConsumable(
@@ -184,6 +206,8 @@ class DefaultInputConsumableDeciderTest {
     private DefaultInputConsumableDecider createDefaultInputConsumableDecider(
             Set<ExecutionVertexID> scheduledVertices, SchedulingTopology schedulingTopology) {
         return new DefaultInputConsumableDecider(
-                scheduledVertices::contains, schedulingTopology::getResultPartition);
+                scheduledVertices::contains,
+                schedulingTopology::getResultPartition,
+                (id) -> schedulingTopology.getVertex(id).getState());
     }
 }

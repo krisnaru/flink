@@ -36,7 +36,7 @@ object FlinkBatchRuleSets {
     FlinkRewriteSubQueryRule.FILTER,
     FlinkSubQueryRemoveRule.FILTER,
     JoinConditionTypeCoerceRule.INSTANCE,
-    FlinkJoinPushExpressionsRule.INSTANCE
+    CoreRules.JOIN_PUSH_EXPRESSIONS
   )
 
   /** Convert sub-queries before query decorrelation. */
@@ -115,11 +115,12 @@ object FlinkBatchRuleSets {
         new CoerceInputsRule(classOf[LogicalMinus], false),
         ConvertToNotInOrInRule.INSTANCE,
         // optimize limit 0
-        FlinkLimit0RemoveRule.INSTANCE,
+        PruneEmptyRules.SORT_FETCH_ZERO_INSTANCE,
         // fix: FLINK-28986 nested filter pattern causes unnest rule mismatch
         CoreRules.FILTER_MERGE,
         // unnest rule
         LogicalUnnestRule.INSTANCE,
+        UncollectToTableFunctionScanRule.INSTANCE,
         // Wrap arguments for JSON aggregate functions
         WrapJsonAggFunctionArgumentsRule.INSTANCE
       )).asJava)
@@ -178,7 +179,7 @@ object FlinkBatchRuleSets {
     PruneEmptyRules.AGGREGATE_INSTANCE,
     PruneEmptyRules.FILTER_INSTANCE,
     PruneEmptyRules.JOIN_LEFT_INSTANCE,
-    FlinkPruneEmptyRules.JOIN_RIGHT_INSTANCE,
+    PruneEmptyRules.JOIN_RIGHT_INSTANCE,
     PruneEmptyRules.PROJECT_INSTANCE,
     PruneEmptyRules.SORT_INSTANCE,
     PruneEmptyRules.UNION_INSTANCE
@@ -196,7 +197,7 @@ object FlinkBatchRuleSets {
     // push a projection to the children of a semi/anti Join
     ProjectSemiAntiJoinTransposeRule.INSTANCE,
     // merge projections
-    CoreRules.PROJECT_MERGE,
+    FlinkProjectMergeRule.INSTANCE,
     // remove identity project
     CoreRules.PROJECT_REMOVE,
     // removes constant keys from an Agg
@@ -245,7 +246,7 @@ object FlinkBatchRuleSets {
     CoreRules.SORT_REMOVE,
 
     // join rules
-    FlinkJoinPushExpressionsRule.INSTANCE,
+    CoreRules.JOIN_PUSH_EXPRESSIONS,
     SimplifyJoinConditionRule.INSTANCE,
 
     // remove union with only a single child
@@ -254,7 +255,7 @@ object FlinkBatchRuleSets {
     CoreRules.UNION_TO_DISTINCT,
 
     // aggregation and projection rules
-    CoreRules.AGGREGATE_PROJECT_MERGE,
+    FlinkAggregateProjectMergeRule.INSTANCE,
     CoreRules.AGGREGATE_PROJECT_PULL_UP_CONSTANTS,
 
     // remove aggregation if it does not aggregate and input is already distinct
@@ -288,7 +289,7 @@ object FlinkBatchRuleSets {
 
     // calc rules
     FlinkFilterCalcMergeRule.INSTANCE,
-    CoreRules.PROJECT_CALC_MERGE,
+    FlinkProjectCalcMergeRule.INSTANCE,
     CoreRules.FILTER_TO_CALC,
     CoreRules.PROJECT_TO_CALC,
     FlinkCalcMergeRule.INSTANCE,

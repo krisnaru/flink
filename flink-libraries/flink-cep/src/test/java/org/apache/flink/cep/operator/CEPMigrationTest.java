@@ -30,17 +30,17 @@ import org.apache.flink.cep.pattern.conditions.SimpleCondition;
 import org.apache.flink.cep.utils.CepOperatorTestUtilities;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.streaming.api.watermark.Watermark;
-import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.OperatorSnapshotUtil;
+import org.apache.flink.test.util.MigrationTest;
 
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -57,31 +57,23 @@ import static org.junit.Assert.assertTrue;
  * write*()} method on the corresponding Flink release-* branch.
  */
 @RunWith(Parameterized.class)
-public class CEPMigrationTest {
-
-    /**
-     * TODO change this to the corresponding savepoint version to be written (e.g. {@link
-     * FlinkVersion#v1_3} for 1.3) TODO and remove all @Ignore annotations on write*Snapshot()
-     * methods to generate savepoints TODO Note: You should generate the savepoint based on the
-     * release branch instead of the master.
-     */
-    private final FlinkVersion flinkGenerateSavepointVersion = null;
+public class CEPMigrationTest implements MigrationTest {
 
     private final FlinkVersion migrateVersion;
 
     @Parameterized.Parameters(name = "Migration Savepoint: {0}")
     public static Collection<FlinkVersion> parameters() {
-        return FlinkVersion.rangeOf(FlinkVersion.v1_8, FlinkVersion.v1_16);
+        return FlinkVersion.rangeOf(
+                FlinkVersion.v1_20, MigrationTest.getMostRecentlyPublishedVersion());
     }
 
     public CEPMigrationTest(FlinkVersion migrateVersion) {
         this.migrateVersion = migrateVersion;
     }
 
-    /** Manually run this to write binary snapshot data. */
-    @Ignore
-    @Test
-    public void writeAfterBranchingPatternSnapshot() throws Exception {
+    @SnapshotsGenerator
+    public void writeAfterBranchingPatternSnapshot(FlinkVersion flinkGenerateSavepointVersion)
+            throws Exception {
 
         KeySelector<Event, Integer> keySelector =
                 new KeySelector<Event, Integer>() {
@@ -246,10 +238,9 @@ public class CEPMigrationTest {
         }
     }
 
-    /** Manually run this to write binary snapshot data. */
-    @Ignore
-    @Test
-    public void writeStartingNewPatternAfterMigrationSnapshot() throws Exception {
+    @SnapshotsGenerator
+    public void writeStartingNewPatternAfterMigrationSnapshot(
+            FlinkVersion flinkGenerateSavepointVersion) throws Exception {
 
         KeySelector<Event, Integer> keySelector =
                 new KeySelector<Event, Integer>() {
@@ -427,10 +418,9 @@ public class CEPMigrationTest {
         }
     }
 
-    /** Manually run this to write binary snapshot data. */
-    @Ignore
-    @Test
-    public void writeSinglePatternAfterMigrationSnapshot() throws Exception {
+    @SnapshotsGenerator
+    public void writeSinglePatternAfterMigrationSnapshot(FlinkVersion flinkGenerateSavepointVersion)
+            throws Exception {
 
         KeySelector<Event, Integer> keySelector =
                 new KeySelector<Event, Integer>() {
@@ -525,10 +515,9 @@ public class CEPMigrationTest {
         }
     }
 
-    /** Manually run this to write binary snapshot data. */
-    @Ignore
-    @Test
-    public void writeAndOrSubtypConditionsPatternAfterMigrationSnapshot() throws Exception {
+    @SnapshotsGenerator
+    public void writeAndOrSubtypConditionsPatternAfterMigrationSnapshot(
+            FlinkVersion flinkGenerateSavepointVersion) throws Exception {
 
         KeySelector<Event, Integer> keySelector =
                 new KeySelector<Event, Integer>() {
@@ -643,7 +632,7 @@ public class CEPMigrationTest {
             Pattern<Event, ?> pattern =
                     Pattern.<Event>begin("start")
                             .where(new StartFilter())
-                            .within(Time.milliseconds(10L));
+                            .within(Duration.ofMillis(10L));
 
             return NFACompiler.compileFactory(pattern, handleTimeout).createNFA();
         }
@@ -672,7 +661,7 @@ public class CEPMigrationTest {
                             .where(new MiddleFilter())
                             .or(new SubEventEndFilter())
                             .times(2)
-                            .within(Time.milliseconds(10L));
+                            .within(Duration.ofMillis(10L));
 
             return NFACompiler.compileFactory(pattern, handleTimeout).createNFA();
         }
@@ -705,7 +694,7 @@ public class CEPMigrationTest {
                             .where(new EndFilter())
                             // add a window timeout to test whether timestamps of elements in the
                             // priority queue in CEP operator are correctly checkpointed/restored
-                            .within(Time.milliseconds(10L));
+                            .within(Duration.ofMillis(10L));
 
             return NFACompiler.compileFactory(pattern, handleTimeout).createNFA();
         }

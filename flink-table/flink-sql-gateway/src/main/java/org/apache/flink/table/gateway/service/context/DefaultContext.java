@@ -25,6 +25,7 @@ import org.apache.flink.client.cli.CustomCommandLine;
 import org.apache.flink.client.cli.ExecutionConfigAccessor;
 import org.apache.flink.client.cli.ProgramOptions;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.DeploymentOptionsInternal;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.plugin.PluginUtils;
@@ -36,12 +37,10 @@ import org.apache.commons.cli.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.file.Paths;
-import java.util.ArrayList;
+import java.net.URI;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -50,9 +49,13 @@ public class DefaultContext {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultContext.class);
 
     private final Configuration flinkConfig;
-    private final List<URL> dependencies;
+    private final List<URI> dependencies;
 
-    public DefaultContext(Configuration flinkConfig, List<URL> dependencies) {
+    public DefaultContext(Map<String, String> flinkConfig, List<URI> dependencies) {
+        this(Configuration.fromMap(flinkConfig), dependencies);
+    }
+
+    public DefaultContext(Configuration flinkConfig, List<URI> dependencies) {
         this.flinkConfig = flinkConfig;
         this.dependencies = dependencies;
     }
@@ -61,7 +64,7 @@ public class DefaultContext {
         return flinkConfig;
     }
 
-    public List<URL> getDependencies() {
+    public List<URI> getDependencies() {
         return dependencies;
     }
 
@@ -78,8 +81,7 @@ public class DefaultContext {
     private static Configuration createExecutionConfig(
             CommandLine commandLine,
             Options commandLineOptions,
-            List<CustomCommandLine> availableCommandLines,
-            List<URL> dependencies)
+            List<CustomCommandLine> availableCommandLines)
             throws FlinkException {
         LOG.debug("Available commandline options: {}", commandLineOptions);
         List<String> options =
@@ -103,7 +105,8 @@ public class DefaultContext {
         try {
             final ProgramOptions programOptions = ProgramOptions.create(commandLine);
             final ExecutionConfigAccessor executionConfigAccessor =
-                    ExecutionConfigAccessor.fromProgramOptions(programOptions, dependencies);
+                    ExecutionConfigAccessor.fromProgramOptions(
+                            programOptions, Collections.emptyList());
             executionConfigAccessor.applyToConfiguration(executionConfig);
         } catch (CliArgsException e) {
             throw new SqlGatewayException("Invalid deployment run options.", e);
@@ -125,13 +128,22 @@ public class DefaultContext {
 
     // -------------------------------------------------------------------------------------------
 
+    /**
+     * Build the {@link DefaultContext} from config.yaml, dynamic configuration and users specified
+     * jars.
+     *
+     * @param dynamicConfig user specified configuration.
+     * @param dependencies user specified jars
+     * @param discoverExecutionConfig flag whether to load the execution configuration
+     */
     public static DefaultContext load(
-            Configuration dynamicConfig, List<URL> dependencies, boolean discoverPythonDependency) {
+            Configuration dynamicConfig, List<URI> dependencies, boolean discoverExecutionConfig) {
         // 1. find the configuration directory
         String flinkConfigDir = CliFrontend.getConfigurationDirectoryFromEnv();
 
         // 2. load the global configuration
         Configuration configuration = GlobalConfiguration.loadConfiguration(flinkConfigDir);
+        configuration.set(DeploymentOptionsInternal.CONF_DIR, flinkConfigDir);
         configuration.addAll(dynamicConfig);
 
         // 3. load the custom command lines
@@ -142,43 +154,21 @@ public class DefaultContext {
         FileSystem.initialize(
                 configuration, PluginUtils.createPluginManagerFromRootFolder(configuration));
 
-        if (discoverPythonDependency) {
-            dependencies = new ArrayList<>(dependencies);
-            dependencies.addAll(discoverPythonDependencies());
-        }
+        if (discoverExecutionConfig) {
+            Options commandLineOptions = collectCommandLineOptions(commandLines);
 
-        Options commandLineOptions = collectCommandLineOptions(commandLines);
-
-        try {
-            CommandLine deploymentCommandLine =
-                    CliFrontendParser.parse(commandLineOptions, new String[] {}, true);
-            configuration.addAll(
-                    createExecutionConfig(
-                            deploymentCommandLine, commandLineOptions, commandLines, dependencies));
-        } catch (Exception e) {
-            throw new SqlGatewayException(
-                    "Could not load available CLI with Environment Deployment entry.", e);
+            try {
+                CommandLine deploymentCommandLine =
+                        CliFrontendParser.parse(commandLineOptions, new String[] {}, true);
+                configuration.addAll(
+                        createExecutionConfig(
+                                deploymentCommandLine, commandLineOptions, commandLines));
+            } catch (Exception e) {
+                throw new SqlGatewayException(
+                        "Could not load available CLI with Environment Deployment entry.", e);
+            }
         }
 
         return new DefaultContext(configuration, dependencies);
-    }
-
-    private static List<URL> discoverPythonDependencies() {
-        try {
-            URL location =
-                    Class.forName(
-                                    "org.apache.flink.python.PythonFunctionRunner",
-                                    false,
-                                    Thread.currentThread().getContextClassLoader())
-                            .getProtectionDomain()
-                            .getCodeSource()
-                            .getLocation();
-            if (Paths.get(location.toURI()).toFile().isFile()) {
-                return Collections.singletonList(location);
-            }
-        } catch (URISyntaxException | ClassNotFoundException e) {
-            LOG.warn("Failed to find flink-python jar." + e);
-        }
-        return Collections.emptyList();
     }
 }

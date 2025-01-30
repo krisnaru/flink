@@ -59,7 +59,7 @@ whether the REST Endpoint is available.
 
 ```bash
 $ curl http://localhost:8083/v1/info
-{"productName":"Apache Flink","version":"1.16-SNAPSHOT"}
+{"productName":"Apache Flink","version":"{{< version >}}"}
 ```
 
 ### Running SQL Queries
@@ -122,6 +122,34 @@ The `nextResultUri` in the results is used to fetch the next batch results if it
 $ curl --request GET ${nextResultUri}
 ```
 
+### Deploying a Script
+
+SQL Gateway supports deploying a script in [Application Mode]({{< ref "docs/deployment/overview" >}}). In application mode, [JobManager]({{< ref "docs/concepts/flink-architecture" >}}#jobmanager) is responsible for compiling the script.
+If you want to use custom resources in the script, e.g. Kafka Source, please use [ADD JAR]({{< ref "docs/dev/table/sql/jar">}}) command to download the [required artifacts]({{< ref "docs/dev/configuration/connector" >}}#available-artifacts). 
+
+Here is an example for deploying a script to a Flink native K8S Cluster with cluster id `CLUSTER_ID`.
+
+```bash
+$ curl --request POST http://localhost:8083/sessions/${SESSION_HANDLE}/scripts \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "script": "CREATE TEMPORARY TABLE sink(a INT) WITH ( '\''connector'\'' = '\''blackhole'\''); INSERT INTO sink VALUES (1), (2), (3);",
+    "executionConfig": {
+        "execution.target": "kubernetes-application",
+        "kubernetes.cluster-id": "'${CLUSTER_ID}'",
+        "kubernetes.container.image.ref": "'${FLINK_IMAGE_NAME}'",
+        "jobmanager.memory.process.size": "1000m",
+        "taskmanager.memory.process.size": "1000m",
+        "kubernetes.jobmanager.cpu": 0.5,
+        "kubernetes.taskmanager.cpu": 0.5,
+        "kubernetes.rest-service.exposed.type": "NodePort"
+    }
+}'
+```
+
+<span class="label label-info">Note</span> If you want to run the script with PyFlink, please use an image with PyFlink installed. You can refer to 
+[Enabling PyFlink in docker]({{< ref "docs/deployment/resource-providers/standalone/docker" >}}#enabling-python) for more details.
+
 Configuration
 ----------------
 
@@ -176,19 +204,37 @@ $ ./sql-gateway -Dkey=value
             <td><h5>sql-gateway.session.check-interval</h5></td>
             <td style="word-wrap: break-word;">1 min</td>
             <td>Duration</td>
-            <td>The check interval for idle session timeout, which can be disabled by setting to zero or negative value.</td>
+            <td>The check interval for idle session timeout, which can be disabled by setting to zero.</td>
         </tr>
         <tr>
             <td><h5>sql-gateway.session.idle-timeout</h5></td>
             <td style="word-wrap: break-word;">10 min</td>
             <td>Duration</td>
-            <td>Timeout interval for closing the session when the session hasn't been accessed during the interval. If setting to zero or negative value, the session will not be closed.</td>
+            <td>Timeout interval for closing the session when the session hasn't been accessed during the interval. If setting to zero, the session will not be closed.</td>
         </tr>
         <tr>
             <td><h5>sql-gateway.session.max-num</h5></td>
             <td style="word-wrap: break-word;">1000000</td>
             <td>Integer</td>
             <td>The maximum number of the active session for sql gateway service.</td>
+        </tr>
+        <tr>
+            <td><h5>sql-gateway.session.plan-cache.enabled</h5></td>
+            <td style="word-wrap: break-word;">false</td>
+            <td>Boolean</td>
+            <td>When it is true, sql gateway will cache and reuse plans for queries per session.</td>
+        </tr>
+        <tr>
+            <td><h5>sql-gateway.session.plan-cache.size</h5></td>
+            <td style="word-wrap: break-word;">100</td>
+            <td>Integer</td>
+            <td>Plan cache size, it takes effect iff `table.optimizer.plan-cache.enabled` is true.</td>
+        </tr>
+        <tr>
+            <td><h5>sql-gateway.session.plan-cache.ttl</h5></td>
+            <td style="word-wrap: break-word;">1 hour</td>
+            <td>Duration</td>
+            <td>TTL for plan cache, it controls how long will the cache expire after write, it takes effect iff `table.optimizer.plan-cache.enabled` is true.</td>
         </tr>
         <tr>
             <td><h5>sql-gateway.worker.keepalive-time</h5></td>
@@ -214,21 +260,21 @@ $ ./sql-gateway -Dkey=value
 Supported Endpoints
 ----------------
 
-Flink natively support [REST Endpoint]({{< ref "docs/dev/table/sql-gateway/rest" >}}) and [HiveServer2 Endpoint]({{< ref "docs/dev/table/hive-compatibility/hiveserver2" >}}).
+Flink natively supports [REST Endpoint]({{< ref "docs/dev/table/sql-gateway/rest" >}}) and [HiveServer2 Endpoint]({{< ref "docs/dev/table/sql-gateway/hiveserver2" >}}).
 The SQL Gateway is bundled with the REST Endpoint by default. With the flexible architecture, users are able to start the SQL Gateway with the specified endpoints by calling 
 
 ```bash
 $ ./bin/sql-gateway.sh start -Dsql-gateway.endpoint.type=hiveserver2
 ```
 
-or add the following config in the `conf/flink-conf.yaml`:
+or add the following config in the [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}):
 
 ```yaml
 sql-gateway.endpoint.type: hiveserver2
 ```
 
 {{< hint info >}}
-Notice: The CLI command has higher priority if flink-conf.yaml also contains the option `sql-gateway.endpoint.type`.
+Notice: The CLI command has higher priority if [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}) also contains the option `sql-gateway.endpoint.type`.
 {{< /hint >}}
 
 For the specific endpoint, please refer to the corresponding page.

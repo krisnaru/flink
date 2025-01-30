@@ -21,7 +21,6 @@ package org.apache.flink.table.planner.operations;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
-import org.apache.flink.table.catalog.CatalogManager;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ContextResolvedTable;
 import org.apache.flink.table.catalog.ObjectIdentifier;
@@ -30,16 +29,14 @@ import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.resolver.ExpressionResolver;
-import org.apache.flink.table.factories.DynamicTableSinkFactory;
-import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.factories.TableFactoryUtil;
 import org.apache.flink.table.module.Module;
+import org.apache.flink.table.operations.utils.ExecutableOperationUtils;
 import org.apache.flink.table.planner.calcite.FlinkContext;
 import org.apache.flink.table.planner.plan.rules.logical.SimplifyFilterConditionRule;
 import org.apache.flink.table.planner.plan.utils.FlinkRexUtil;
 import org.apache.flink.table.planner.plan.utils.RexNodeToExpressionConverter;
 import org.apache.flink.table.planner.utils.ShortcutUtils;
-import org.apache.flink.table.planner.utils.TableConfigUtils;
 
 import org.apache.calcite.plan.RelOptPredicateList;
 import org.apache.calcite.plan.RelOptRuleCall;
@@ -57,7 +54,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.TimeZone;
 import java.util.stream.Collectors;
 
 import scala.Option;
@@ -71,9 +67,7 @@ public class DeletePushDownUtils {
      * can't get the {@link DynamicTableSink}.
      */
     public static Optional<DynamicTableSink> getDynamicTableSink(
-            ContextResolvedTable contextResolvedTable,
-            LogicalTableModify tableModify,
-            CatalogManager catalogManager) {
+            ContextResolvedTable contextResolvedTable, LogicalTableModify tableModify) {
         final FlinkContext context = ShortcutUtils.unwrapContext(tableModify.getCluster());
 
         CatalogBaseTable catalogBaseTable = contextResolvedTable.getTable();
@@ -86,34 +80,18 @@ public class DeletePushDownUtils {
             // only consider the CatalogTable that doesn't use legacy connector sink option
             if (!contextResolvedTable.isAnonymous()
                     && !TableFactoryUtil.isLegacyConnectorOptions(
-                            catalogManager
-                                    .getCatalog(objectIdentifier.getCatalogName())
-                                    .orElse(null),
                             context.getTableConfig(),
                             !context.isBatchMode(),
                             objectIdentifier,
                             resolvedTable,
                             isTemporary)) {
-                DynamicTableSinkFactory dynamicTableSinkFactory = null;
-                if (optionalCatalog.isPresent()
-                        && optionalCatalog.get().getFactory().isPresent()
-                        && optionalCatalog.get().getFactory().get()
-                                instanceof DynamicTableSinkFactory) {
-                    // try get from catalog
-                    dynamicTableSinkFactory =
-                            (DynamicTableSinkFactory) optionalCatalog.get().getFactory().get();
-                }
-
-                if (dynamicTableSinkFactory == null) {
-                    Optional<DynamicTableSinkFactory> factoryFromModule =
-                            context.getModuleManager().getFactory((Module::getTableSinkFactory));
-                    // then try get from module
-                    dynamicTableSinkFactory = factoryFromModule.orElse(null);
-                }
                 // create table dynamic table sink
                 DynamicTableSink tableSink =
-                        FactoryUtil.createDynamicTableSink(
-                                dynamicTableSinkFactory,
+                        ExecutableOperationUtils.createDynamicTableSink(
+                                optionalCatalog.orElse(null),
+                                () ->
+                                        context.getModuleManager()
+                                                .getFactory((Module::getTableSinkFactory)),
                                 objectIdentifier,
                                 resolvedTable,
                                 Collections.emptyMap(),
@@ -243,9 +221,7 @@ public class DeletePushDownUtils {
                         filter.getCluster().getRexBuilder(),
                         filter.getInput().getRowType().getFieldNames().toArray(new String[0]),
                         context.getFunctionCatalog(),
-                        context.getCatalogManager(),
-                        TimeZone.getTimeZone(
-                                TableConfigUtils.getLocalTimeZone(context.getTableConfig())));
+                        context.getCatalogManager());
         List<Expression> filters =
                 Arrays.stream(convertiblePredicates)
                         .map(

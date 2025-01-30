@@ -21,40 +21,37 @@ package org.apache.flink.table.runtime.typeutils;
 import org.apache.flink.FlinkVersion;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.TypeSerializerMatchers;
+import org.apache.flink.api.common.typeutils.TypeSerializerConditions;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerUpgradeTestBase;
 import org.apache.flink.api.common.typeutils.base.LongSerializer;
-import org.apache.flink.util.FlinkRuntimeException;
+import org.apache.flink.test.util.MigrationTest;
 
-import org.hamcrest.Matcher;
+import org.assertj.core.api.Condition;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedList;
-import java.util.stream.Collectors;
-
-import static org.hamcrest.Matchers.is;
 
 /** A {@link TypeSerializerUpgradeTestBase} for {@link LinkedListSerializer}. */
 @VisibleForTesting
 public class LinkedListSerializerUpgradeTest
         extends TypeSerializerUpgradeTestBase<LinkedList<Long>, LinkedList<Long>> {
 
-    public Collection<TestSpecification<?, ?>> createTestSpecifications() {
-        return FlinkVersion.rangeOf(FlinkVersion.v1_13, CURRENT_VERSION).stream()
-                .map(
-                        version -> {
-                            try {
-                                return new TestSpecification<>(
-                                        "linked-list-serializer",
-                                        version,
-                                        LinkedListSerializerSetup.class,
-                                        LinkedListSerializerVerifier.class);
-                            } catch (Exception e) {
-                                throw new FlinkRuntimeException(e);
-                            }
-                        })
-                .collect(Collectors.toList());
+    @Override
+    public Collection<FlinkVersion> getMigrationVersions() {
+        return FlinkVersion.rangeOf(
+                FlinkVersion.v1_13, MigrationTest.getMostRecentlyPublishedVersion());
+    }
+
+    public Collection<TestSpecification<?, ?>> createTestSpecifications(FlinkVersion flinkVersion)
+            throws Exception {
+        return Collections.singletonList(
+                new TestSpecification<>(
+                        "linked-list-serializer",
+                        flinkVersion,
+                        LinkedListSerializerSetup.class,
+                        LinkedListSerializerVerifier.class));
     }
 
     public static TypeSerializer<LinkedList<Long>> createLinkedListSerializer() {
@@ -102,23 +99,23 @@ public class LinkedListSerializerUpgradeTest
         }
 
         @Override
-        public Matcher<LinkedList<Long>> testDataMatcher() {
+        public Condition<LinkedList<Long>> testDataCondition() {
             LinkedList<Long> list = new LinkedList<>();
             list.add(42L);
             list.add(-42L);
             list.add(0L);
             list.add(Long.MAX_VALUE);
             list.add(Long.MIN_VALUE);
-            return is(list);
+            return new Condition<>(list::equals, "");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<LinkedList<Long>>>
-                schemaCompatibilityMatcher(FlinkVersion version) {
+        public Condition<TypeSerializerSchemaCompatibility<LinkedList<Long>>>
+                schemaCompatibilityCondition(FlinkVersion version) {
             if (version.isNewerVersionThan(FlinkVersion.v1_13)) {
-                return TypeSerializerMatchers.isCompatibleAsIs();
+                return TypeSerializerConditions.isCompatibleAsIs();
             } else {
-                return TypeSerializerMatchers.isCompatibleAfterMigration();
+                return TypeSerializerConditions.isCompatibleAfterMigration();
             }
         }
     }

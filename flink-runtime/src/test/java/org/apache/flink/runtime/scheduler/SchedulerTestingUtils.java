@@ -19,7 +19,7 @@
 package org.apache.flink.runtime.scheduler;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.blob.BlobWriter;
 import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
@@ -37,7 +37,7 @@ import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.ExecutionVertex;
 import org.apache.flink.runtime.executiongraph.IOMetrics;
 import org.apache.flink.runtime.executiongraph.ResultPartitionBytes;
-import org.apache.flink.runtime.executiongraph.failover.flip1.TestRestartBackoffTimeStrategy;
+import org.apache.flink.runtime.executiongraph.failover.TestRestartBackoffTimeStrategy;
 import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTracker;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.DistributionPattern;
@@ -63,6 +63,7 @@ import org.apache.flink.util.TernaryBoolean;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -76,17 +77,16 @@ import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.finishJobVertex;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 /** A utility class to create {@link DefaultScheduler} instances for testing. */
 public class SchedulerTestingUtils {
 
     private static final long DEFAULT_CHECKPOINT_TIMEOUT_MS = 10 * 60 * 1000;
 
-    private static final Time DEFAULT_TIMEOUT = Time.seconds(300);
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(300);
 
     private SchedulerTestingUtils() {}
 
@@ -106,18 +106,35 @@ public class SchedulerTestingUtils {
             final JobGraph jobGraph,
             @Nullable StateBackend stateBackend,
             @Nullable CheckpointStorage checkpointStorage) {
+        enableCheckpointing(
+                jobGraph,
+                stateBackend,
+                checkpointStorage,
+                Long.MAX_VALUE, // disable periodical checkpointing
+                false);
+    }
+
+    public static void enableCheckpointing(
+            final JobGraph jobGraph,
+            @Nullable StateBackend stateBackend,
+            @Nullable CheckpointStorage checkpointStorage,
+            long checkpointInterval,
+            boolean enableCheckpointsAfterTasksFinish) {
 
         final CheckpointCoordinatorConfiguration config =
-                new CheckpointCoordinatorConfiguration(
-                        Long.MAX_VALUE, // disable periodical checkpointing
-                        DEFAULT_CHECKPOINT_TIMEOUT_MS,
-                        0,
-                        1,
-                        CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION,
-                        false,
-                        false,
-                        0,
-                        0);
+                new CheckpointCoordinatorConfiguration.CheckpointCoordinatorConfigurationBuilder()
+                        .setCheckpointInterval(checkpointInterval)
+                        .setCheckpointTimeout(DEFAULT_CHECKPOINT_TIMEOUT_MS)
+                        .setMinPauseBetweenCheckpoints(0)
+                        .setMaxConcurrentCheckpoints(1)
+                        .setCheckpointRetentionPolicy(
+                                CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION)
+                        .setExactlyOnce(false)
+                        .setUnalignedCheckpointsEnabled(false)
+                        .setTolerableCheckpointFailureNumber(0)
+                        .setCheckpointIdOfIgnoredInFlightData(0)
+                        .setEnableCheckpointsAfterTasksFinish(enableCheckpointsAfterTasksFinish)
+                        .build();
 
         SerializedValue<StateBackend> serializedStateBackend = null;
         if (stateBackend != null) {
@@ -206,7 +223,7 @@ public class SchedulerTestingUtils {
                     scheduler.updateTaskExecutionState(
                             new TaskExecutionState(attemptId, ExecutionState.CANCELED));
 
-            assertTrue("could not switch task to RUNNING", setToRunning);
+            assertThat(setToRunning).as("could not switch task to RUNNING").isTrue();
         }
     }
 
@@ -231,8 +248,9 @@ public class SchedulerTestingUtils {
 
     public static void acknowledgeCurrentCheckpoint(DefaultScheduler scheduler) {
         final CheckpointCoordinator checkpointCoordinator = getCheckpointCoordinator(scheduler);
-        assertEquals(
-                "Coordinator has not ", 1, checkpointCoordinator.getNumberOfPendingCheckpoints());
+        assertThat(checkpointCoordinator.getNumberOfPendingCheckpoints())
+                .as("Coordinator has not ")
+                .isOne();
 
         final PendingCheckpoint pc =
                 checkpointCoordinator.getPendingCheckpoints().values().iterator().next();
@@ -265,10 +283,9 @@ public class SchedulerTestingUtils {
         final CheckpointCoordinator checkpointCoordinator = getCheckpointCoordinator(scheduler);
         checkpointCoordinator.triggerCheckpoint(false);
 
-        assertEquals(
-                "test setup inconsistent",
-                1,
-                checkpointCoordinator.getNumberOfPendingCheckpoints());
+        assertThat(checkpointCoordinator.getNumberOfPendingCheckpoints())
+                .as("test setup inconsistent")
+                .isOne();
         final PendingCheckpoint checkpoint =
                 checkpointCoordinator.getPendingCheckpoints().values().iterator().next();
         final CompletableFuture<CompletedCheckpoint> future = checkpoint.getCompletionFuture();
@@ -276,7 +293,7 @@ public class SchedulerTestingUtils {
         acknowledgePendingCheckpoint(scheduler, checkpoint.getCheckpointID());
 
         CompletedCheckpoint completed = future.getNow(null);
-        assertNotNull("checkpoint not complete", completed);
+        assertThat(completed).withFailMessage("checkpoint not complete").isNotNull();
         return completed;
     }
 
@@ -313,7 +330,7 @@ public class SchedulerTestingUtils {
 
     public static SlotSharingExecutionSlotAllocatorFactory
             newSlotSharingExecutionSlotAllocatorFactory(
-                    PhysicalSlotProvider physicalSlotProvider, Time allocationTimeout) {
+                    PhysicalSlotProvider physicalSlotProvider, Duration allocationTimeout) {
         return new SlotSharingExecutionSlotAllocatorFactory(
                 physicalSlotProvider,
                 true,
@@ -332,13 +349,19 @@ public class SchedulerTestingUtils {
             ComponentMainThreadExecutor mainThreadExecutor,
             ScheduledExecutorService ioExecutor,
             JobMasterPartitionTracker partitionTracker,
-            ScheduledExecutorService scheduledExecutor)
+            ScheduledExecutorService scheduledExecutor,
+            Configuration jobMasterConfiguration)
             throws Exception {
         final List<JobVertex> vertices = new ArrayList<>(Collections.singletonList(producer));
         IntermediateDataSetID dataSetId = new IntermediateDataSetID();
         for (JobVertex consumer : consumers) {
-            consumer.connectNewDataSetAsInput(
-                    producer, distributionPattern, ResultPartitionType.BLOCKING, dataSetId, false);
+            connectNewDataSetAsInput(
+                    consumer,
+                    producer,
+                    distributionPattern,
+                    ResultPartitionType.BLOCKING,
+                    dataSetId,
+                    false);
             vertices.add(consumer);
         }
 
@@ -351,7 +374,8 @@ public class SchedulerTestingUtils {
                         mainThreadExecutor,
                         ioExecutor,
                         partitionTracker,
-                        scheduledExecutor);
+                        scheduledExecutor,
+                        jobMasterConfiguration);
         final ExecutionGraph executionGraph = scheduler.getExecutionGraph();
         final TestingLogicalSlotBuilder slotBuilder = new TestingLogicalSlotBuilder();
 
@@ -402,7 +426,8 @@ public class SchedulerTestingUtils {
             ComponentMainThreadExecutor mainThreadExecutor,
             ScheduledExecutorService ioExecutor,
             JobMasterPartitionTracker partitionTracker,
-            ScheduledExecutorService scheduledExecutor)
+            ScheduledExecutorService scheduledExecutor,
+            Configuration jobMasterConfiguration)
             throws Exception {
         final JobGraph jobGraph =
                 JobGraphBuilder.newBatchJobGraphBuilder()
@@ -415,7 +440,8 @@ public class SchedulerTestingUtils {
                         .setRestartBackoffTimeStrategy(new TestRestartBackoffTimeStrategy(true, 0))
                         .setBlobWriter(blobWriter)
                         .setIoExecutor(ioExecutor)
-                        .setPartitionTracker(partitionTracker);
+                        .setPartitionTracker(partitionTracker)
+                        .setJobMasterConfiguration(jobMasterConfiguration);
         return isAdaptive ? builder.buildAdaptiveBatchJobScheduler() : builder.build();
     }
 

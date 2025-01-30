@@ -20,10 +20,12 @@ package org.apache.flink.table.client.cli;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.DeploymentOptions;
+import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.core.testutils.CheckedThread;
 import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.ResultKind;
-import org.apache.flink.table.api.SqlDialect;
 import org.apache.flink.table.api.internal.TableResultImpl;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ResolvedSchema;
@@ -40,6 +42,7 @@ import org.apache.flink.table.operations.Operation;
 import org.apache.flink.table.operations.QueryOperation;
 import org.apache.flink.util.CloseableIterator;
 
+import org.apache.commons.io.FileUtils;
 import org.jline.reader.Candidate;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -48,6 +51,9 @@ import org.jline.reader.Parser;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.impl.DumbTerminal;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import javax.annotation.Nullable;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -55,12 +61,15 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.flink.table.api.config.TableConfigOptions.TABLE_DML_SYNC;
 import static org.apache.flink.table.api.internal.StaticResultProvider.SIMPLE_ROW_DATA_TO_STRING_CONVERTER;
@@ -74,9 +83,11 @@ class CliClientTest {
             "INSERT INTO MyTable SELECT * FROM MyOtherTable";
     private static final String INSERT_OVERWRITE_STATEMENT =
             "INSERT OVERWRITE MyTable SELECT * FROM MyOtherTable";
-    private static final String ORIGIN_HIVE_SQL = "SELECT pos\t FROM source_table;\n";
-    private static final String HIVE_SQL_WITHOUT_COMPLETER = "SELECT pos FROM source_table;";
-    private static final String HIVE_SQL_WITH_COMPLETER = "SELECT POSITION  FROM source_table;";
+    private static final String ORIGIN_SQL = "SELECT pos\t FROM source_table;\n";
+    private static final String SQL_WITHOUT_COMPLETER = "SELECT pos FROM source_table;";
+    private static final String SQL_WITH_COMPLETER = "SELECT POSITION  FROM source_table;";
+
+    private static @TempDir Path home;
 
     @Test
     void testUpdateSubmission() throws Exception {
@@ -105,23 +116,22 @@ class CliClientTest {
 
     @Test
     void testExecuteSqlFileWithoutSqlCompleter() throws Exception {
-        MockExecutor executor = new MockExecutor(new SqlParserHelper(SqlDialect.HIVE), false);
-        executeSqlFromContent(executor, ORIGIN_HIVE_SQL);
-        assertThat(executor.receivedStatement).contains(HIVE_SQL_WITHOUT_COMPLETER);
+        MockExecutor executor = new MockExecutor(new SqlParserHelper(), false);
+        executeSqlFromContent(executor, ORIGIN_SQL);
+        assertThat(executor.receivedStatement).contains(SQL_WITHOUT_COMPLETER);
     }
 
     @Test
     void testExecuteSqlInteractiveWithSqlCompleter() throws Exception {
-        final MockExecutor mockExecutor =
-                new MockExecutor(new SqlParserHelper(SqlDialect.HIVE), false);
+        final MockExecutor mockExecutor = new MockExecutor(new SqlParserHelper(), false);
 
-        InputStream inputStream = new ByteArrayInputStream(ORIGIN_HIVE_SQL.getBytes());
+        InputStream inputStream = new ByteArrayInputStream(ORIGIN_SQL.getBytes());
         OutputStream outputStream = new ByteArrayOutputStream(256);
         try (Terminal terminal = new DumbTerminal(inputStream, outputStream);
                 CliClient client =
                         new CliClient(() -> terminal, mockExecutor, historyTempFile(), null)) {
             client.executeInInteractiveMode();
-            assertThat(mockExecutor.receivedStatement).contains(HIVE_SQL_WITH_COMPLETER);
+            assertThat(mockExecutor.receivedStatement).contains(SQL_WITH_COMPLETER);
         }
     }
 
@@ -256,14 +266,18 @@ class CliClientTest {
         Path historyFilePath = historyTempFile();
 
         OutputStream outputStream = new ByteArrayOutputStream(256);
-
+        File script =
+                home.resolve(String.format("script_%s.sql", System.currentTimeMillis())).toFile();
+        assertThat(script.createNewFile()).isTrue();
         try (CliClient client =
                 new CliClient(
                         () -> TerminalUtils.createDumbTerminal(outputStream),
                         mockExecutor,
                         historyFilePath,
                         null)) {
-            Thread thread = new Thread(() -> client.executeInNonInteractiveMode(content));
+            FileUtils.writeStringToFile(script, content, StandardCharsets.UTF_8);
+            Thread thread = new Thread(() -> client.executeInNonInteractiveMode(script.toURI()));
+
             thread.start();
 
             while (!mockExecutor.isAwait) {
@@ -294,14 +308,13 @@ class CliClientTest {
         try (Terminal terminal = TerminalUtils.createDumbTerminal(inputStream, outputStream);
                 CliClient client =
                         new CliClient(() -> terminal, mockExecutor, historyFilePath, null)) {
-            Thread thread =
-                    new Thread(
-                            () -> {
-                                try {
-                                    client.executeInInteractiveMode();
-                                } catch (Exception ignore) {
-                                }
-                            });
+            CheckedThread thread =
+                    new CheckedThread() {
+                        @Override
+                        public void go() {
+                            client.executeInInteractiveMode();
+                        }
+                    };
             thread.start();
 
             while (!mockExecutor.isAwait) {
@@ -311,6 +324,31 @@ class CliClientTest {
             terminal.raise(Terminal.Signal.INT);
             CommonTestUtils.waitUntilCondition(
                     () -> outputStream.toString().contains(CliStrings.MESSAGE_HELP));
+            // Prevent NPE when closing the terminal. See FLINK-33116 for more information.
+            thread.sync();
+        }
+    }
+
+    @Test
+    void testDeployScript() throws Exception {
+        final MockExecutor mockExecutor = new MockExecutor(new SqlParserHelper(), true);
+        Path historyFilePath = historyTempFile();
+
+        File script =
+                home.resolve(String.format("script_%s.sql", System.currentTimeMillis())).toFile();
+        mockExecutor.configuration.set(DeploymentOptions.TARGET, "kubernetes-application");
+        assertThat(script.createNewFile()).isTrue();
+        try (OutputStream outputStream = new ByteArrayOutputStream(256);
+                CliClient client =
+                        new CliClient(
+                                () -> TerminalUtils.createDumbTerminal(outputStream),
+                                mockExecutor,
+                                historyFilePath,
+                                null)) {
+            client.executeInNonInteractiveMode(script.toURI());
+            assertThat(outputStream.toString())
+                    .contains("[INFO] Deploy script in application mode: ")
+                    .contains("Cluster ID: test-application-cluster");
         }
     }
 
@@ -366,13 +404,18 @@ class CliClientTest {
 
     private String executeSqlFromContent(MockExecutor executor, String content) throws IOException {
         OutputStream outputStream = new ByteArrayOutputStream(256);
+        File script = home.resolve("script.sql").toFile();
+        assertThat(script.createNewFile()).isTrue();
         try (CliClient client =
                 new CliClient(
                         () -> TerminalUtils.createDumbTerminal(outputStream),
                         executor,
                         historyTempFile(),
                         null)) {
-            client.executeInNonInteractiveMode(content);
+            FileUtils.writeStringToFile(script, content, StandardCharsets.UTF_8);
+            client.executeInNonInteractiveMode(script.toURI());
+        } finally {
+            script.delete();
         }
         return outputStream.toString();
     }
@@ -406,8 +449,13 @@ class CliClientTest {
         public void configureSession(String statement) {}
 
         @Override
-        public Configuration getSessionConfig() {
+        public ReadableConfig getSessionConfig() {
             return configuration;
+        }
+
+        @Override
+        public Map<String, String> getSessionConfigMap() {
+            return configuration.toMap();
         }
 
         @Override
@@ -456,6 +504,11 @@ class CliClientTest {
             receivedStatement = statement;
             receivedPosition = position;
             return Arrays.asList(helper.getSqlParser().getCompletionHints(statement, position));
+        }
+
+        @Override
+        public String deployScript(@Nullable String script, @Nullable URI uri) {
+            return "test-application-cluster";
         }
 
         @Override

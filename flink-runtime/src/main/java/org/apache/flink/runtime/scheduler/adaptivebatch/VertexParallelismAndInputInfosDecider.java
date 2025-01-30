@@ -37,14 +37,34 @@ public interface VertexParallelismAndInputInfosDecider {
      *
      * @param jobVertexId The job vertex id
      * @param consumedResults The information of consumed blocking results
-     * @param initialParallelism The initial parallelism of the job vertex. If it's a positive
+     * @param vertexInitialParallelism The initial parallelism of the job vertex. If it's a positive
      *     number, it will be respected. If it's not set(equals to {@link
      *     ExecutionConfig#PARALLELISM_DEFAULT}), a parallelism will be automatically decided for
      *     the vertex.
+     * @param vertexMinParallelism The min parallelism of the job vertex.
+     * @param vertexMaxParallelism The max parallelism of the job vertex.
      * @return the parallelism and vertex input infos.
      */
     ParallelismAndInputInfos decideParallelismAndInputInfosForVertex(
             JobVertexID jobVertexId,
-            List<BlockingResultInfo> consumedResults,
-            int initialParallelism);
+            List<BlockingInputInfo> consumedResults,
+            int vertexInitialParallelism,
+            int vertexMinParallelism,
+            int vertexMaxParallelism);
+
+    /**
+     * Compute source parallelism upper bound for the source vertex.
+     *
+     * @param jobVertexId The job vertex id
+     * @param maxParallelism The max parallelism of the job vertex.
+     * @return the upper bound parallelism for the source vertex.
+     */
+    int computeSourceParallelismUpperBound(JobVertexID jobVertexId, int maxParallelism);
+
+    /**
+     * Get the average size of data volume to expect each task instance to process.
+     *
+     * @return the data volume.
+     */
+    long getDataVolumePerTask();
 }

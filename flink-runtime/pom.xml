@@ -25,7 +25,7 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-parent</artifactId>
-		<version>1.18-SNAPSHOT</version>
+		<version>2.1-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>flink-runtime</artifactId>
@@ -33,7 +33,35 @@ under the License.
 
 	<packaging>jar</packaging>
 
+	<properties>
+		<!--
+		Two properties below should be merged once support for jdk8 and jdk11 is dropped.
+		The reason of extraction into a separate property with profile is that
+		specifying -Djava.security.manager=allow within ${surefire.module.config} leads to
+		hanging of surefire for jdk8 and jdk11
+		-->
+		<surefire.module.config.jdk21></surefire.module.config.jdk21>
+		<surefire.module.config> ${surefire.module.config.jdk21} <!--
+			JobManagerProcessUtilsTest
+			-->--add-opens=java.base/java.util=ALL-UNNAMED <!--
+			ConnectionUtilsTest
+			-->--add-opens=java.base/java.lang=ALL-UNNAMED <!--
+			-->--add-opens=java.base/java.net=ALL-UNNAMED <!--
+			OperatorStateBackendTest
+			-->--add-opens=java.base/java.io=ALL-UNNAMED <!--
+			AsynchronousFileIOChannelTest
+			-->--add-opens=java.base/java.util.concurrent=ALL-UNNAMED <!--
+			-->-Djunit.platform.reflection.search.useLegacySemantics=true
+		</surefire.module.config>
+	</properties>
+
 	<dependencies>
+
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-datastream-api</artifactId>
+			<version>${project.version}</version>
+		</dependency>
 
 		<!-- core dependencies -->
 
@@ -62,12 +90,6 @@ under the License.
 			<version>${project.version}</version>
 			<type>test-jar</type>
 			<scope>test</scope>
-		</dependency>
-
-		<dependency>
-			<groupId>org.apache.flink</groupId>
-			<artifactId>flink-java</artifactId>
-			<version>${project.version}</version>
 		</dependency>
 
 		<dependency>
@@ -173,6 +195,12 @@ under the License.
 		</dependency>
 
 		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-connector-datagen</artifactId>
+			<version>${project.version}</version>
+		</dependency>
+
+		<dependency>
 			<groupId>org.apache.commons</groupId>
 			<artifactId>commons-text</artifactId>
 		</dependency>
@@ -194,6 +222,13 @@ under the License.
 			<artifactId>snappy-java</artifactId>
 		</dependency>
 
+		<!-- Async Profiler library -->
+		<dependency>
+			<groupId>tools.profiler</groupId>
+			<artifactId>async-profiler</artifactId>
+			<version>2.9</version>
+		</dependency>
+
 		<!-- Lz4 compression library -->
 		<dependency>
 			<groupId>org.lz4</groupId>
@@ -204,7 +239,8 @@ under the License.
 		<dependency>
 			<groupId>io.airlift</groupId>
 			<artifactId>aircompressor</artifactId>
-			<version>0.21</version>
+			<version>0.27</version>
+			<optional>${flink.markBundledAsOptional}</optional>
 		</dependency>
 
 		<!-- test dependencies -->
@@ -256,11 +292,24 @@ under the License.
 			<scope>test</scope>
 		</dependency>
 
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-migration-test-utils</artifactId>
+			<version>${project.version}</version>
+			<scope>test</scope>
+		</dependency>
+
 		<!-- Used only for additional logging. Optional because of unclear EPL 1.0 license compatibility. -->
 		<dependency>
 			<groupId>com.github.oshi</groupId>
 			<artifactId>oshi-core</artifactId>
 			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.mockito</groupId>
+			<artifactId>mockito-subclass</artifactId>
+			<scope>test</scope>
 		</dependency>
 	</dependencies>
 
@@ -348,6 +397,12 @@ under the License.
 						<goals>
 							<goal>test-jar</goal>
 						</goals>
+						<configuration>
+							<excludes>
+								<!-- test-jar is still used by JUnit4 modules -->
+								<exclude>META-INF/services/org.junit.jupiter.api.extension.Extension</exclude>
+							</excludes>
+						</configuration>
 					</execution>
 				</executions>
 			</plugin>
@@ -382,4 +437,60 @@ under the License.
 			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<profile>
+			<id>generate-migration-test-data</id>
+			<build>
+				<plugins>
+					<plugin>
+						<artifactId>maven-antrun-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>generate-migration-test-data</id>
+								<phase>package</phase>
+								<goals>
+									<goal>run</goal>
+								</goals>
+								<configuration>
+									<target>
+										<condition property="optional.classes" value="--classes '${generate.classes}'"
+												   else="">
+											<isset property="generate.classes"/>
+										</condition>
+										<condition property="optional.prefixes"
+												   value="--prefixes '${generate.prefixes}'" else="">
+											<isset property="generate.prefixes"/>
+										</condition>
+										<java classname="org.apache.flink.test.migration.MigrationTestsSnapshotGenerator"
+											  fork="true" failonerror="true" dir="${project.basedir}">
+											<classpath refid="maven.test.classpath"/>
+											<arg value="--dir"/>
+											<arg line="${project.basedir}"/>
+											<arg value="--version"/>
+											<arg value="${generate.version}"/>
+											<arg line="${optional.classes}"/>
+											<arg line="${optional.prefixes}"/>
+										</java>
+									</target>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<profile>
+			<id>java21</id>
+			<activation>
+				<jdk>[21,)</jdk>
+			</activation>
+
+			<properties>
+				<surefire.module.config.jdk21> <!--
+					required by AbstractFineGrainedSlotManagerITCase-->
+					-Djava.security.manager=allow</surefire.module.config.jdk21>
+			</properties>
+		</profile>
+	</profiles>
 </project>

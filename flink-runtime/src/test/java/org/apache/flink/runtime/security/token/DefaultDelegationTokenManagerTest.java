@@ -32,10 +32,13 @@ import java.time.Clock;
 import java.time.ZoneId;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.Instant.ofEpochMilli;
+import static org.apache.flink.configuration.ConfigurationUtils.getBooleanConfigOption;
 import static org.apache.flink.configuration.SecurityOptions.DELEGATION_TOKENS_RENEWAL_TIME_RATIO;
 import static org.apache.flink.core.security.token.DelegationTokenProvider.CONFIG_PREFIX;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -68,7 +71,7 @@ public class DefaultDelegationTokenManagerTest {
     @Test
     public void isProviderEnabledMustGiveBackFalseWhenDisabled() {
         Configuration configuration = new Configuration();
-        configuration.setBoolean(CONFIG_PREFIX + ".test.enabled", false);
+        configuration.set(getBooleanConfigOption(CONFIG_PREFIX + ".test.enabled"), false);
 
         assertFalse(DefaultDelegationTokenManager.isProviderEnabled(configuration, "test"));
     }
@@ -92,7 +95,7 @@ public class DefaultDelegationTokenManagerTest {
     @Test
     public void testAllProvidersLoaded() {
         Configuration configuration = new Configuration();
-        configuration.setBoolean(CONFIG_PREFIX + ".throw.enabled", false);
+        configuration.set(getBooleanConfigOption(CONFIG_PREFIX + ".throw.enabled"), false);
         DefaultDelegationTokenManager delegationTokenManager =
                 new DefaultDelegationTokenManager(configuration, null, null, null);
 
@@ -163,6 +166,28 @@ public class DefaultDelegationTokenManagerTest {
     }
 
     @Test
+    public void checkSamePrefixedProvidersShouldNotGiveErrorsWhenNoSamePrefix() {
+        Map<String, DelegationTokenProvider> providers = new HashMap<>();
+        providers.put("s3-hadoop", new TestDelegationTokenProvider());
+        Set<String> warnings = new HashSet<>();
+        DefaultDelegationTokenManager.checkSamePrefixedProviders(providers, warnings);
+        assertTrue(warnings.isEmpty());
+    }
+
+    @Test
+    public void checkSamePrefixedProvidersShouldGiveErrorsWhenSamePrefix() {
+        Map<String, DelegationTokenProvider> providers = new HashMap<>();
+        providers.put("s3-hadoop", new TestDelegationTokenProvider());
+        providers.put("s3-presto", new TestDelegationTokenProvider());
+        Set<String> warnings = new HashSet<>();
+        DefaultDelegationTokenManager.checkSamePrefixedProviders(providers, warnings);
+        assertEquals(1, warnings.size());
+        assertEquals(
+                "Multiple providers loaded with the same prefix: s3. This might lead to unintended consequences, please consider using only one of them.",
+                warnings.iterator().next());
+    }
+
+    @Test
     public void startTokensUpdateShouldScheduleRenewal() {
         final ManuallyTriggeredScheduledExecutor scheduledExecutor =
                 new ManuallyTriggeredScheduledExecutor();
@@ -171,7 +196,7 @@ public class DefaultDelegationTokenManagerTest {
 
         ExceptionThrowingDelegationTokenProvider.addToken.set(true);
         Configuration configuration = new Configuration();
-        configuration.setBoolean(CONFIG_PREFIX + ".throw.enabled", true);
+        configuration.set(getBooleanConfigOption(CONFIG_PREFIX + ".throw.enabled"), true);
         AtomicInteger startTokensUpdateCallCount = new AtomicInteger(0);
         DefaultDelegationTokenManager delegationTokenManager =
                 new DefaultDelegationTokenManager(
@@ -198,7 +223,7 @@ public class DefaultDelegationTokenManagerTest {
     @Test
     public void calculateRenewalDelayShouldConsiderRenewalRatio() {
         Configuration configuration = new Configuration();
-        configuration.setBoolean(CONFIG_PREFIX + ".throw.enabled", false);
+        configuration.set(getBooleanConfigOption(CONFIG_PREFIX + ".throw.enabled"), false);
         configuration.set(DELEGATION_TOKENS_RENEWAL_TIME_RATIO, 0.5);
         DefaultDelegationTokenManager delegationTokenManager =
                 new DefaultDelegationTokenManager(configuration, null, null, null);

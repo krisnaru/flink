@@ -28,6 +28,7 @@ import org.apache.flink.table.planner.utils.JavaScalaConversionUtil
 import org.apache.calcite.plan.{RelOptCluster, RelOptTable, RelTraitSet}
 import org.apache.calcite.rel.RelNode
 import org.apache.calcite.rel.core.{JoinInfo, JoinRelType}
+import org.apache.calcite.rel.hint.RelHint
 import org.apache.calcite.rex.RexProgram
 
 import java.util
@@ -42,7 +43,10 @@ class BatchPhysicalLookupJoin(
     temporalTable: RelOptTable,
     tableCalcProgram: Option[RexProgram],
     joinInfo: JoinInfo,
-    joinType: JoinRelType)
+    joinType: JoinRelType,
+    lookupHint: Option[RelHint] = Option.empty,
+    enableLookupShuffle: Boolean = false,
+    preferCustomShuffle: Boolean = false)
   extends CommonPhysicalLookupJoin(
     cluster,
     traitSet,
@@ -50,7 +54,11 @@ class BatchPhysicalLookupJoin(
     temporalTable,
     tableCalcProgram,
     joinInfo,
-    joinType)
+    joinType,
+    lookupHint,
+    false,
+    enableLookupShuffle,
+    preferCustomShuffle)
   with BatchPhysicalRel {
 
   override def copy(traitSet: RelTraitSet, inputs: util.List[RelNode]): RelNode = {
@@ -61,7 +69,10 @@ class BatchPhysicalLookupJoin(
       temporalTable,
       tableCalcProgram,
       joinInfo,
-      joinType)
+      joinType,
+      lookupHint,
+      enableLookupShuffle,
+      preferCustomShuffle)
   }
 
   override def translateToExecNode(): ExecNode[_] = {
@@ -76,7 +87,8 @@ class BatchPhysicalLookupJoin(
     new BatchExecLookupJoin(
       tableConfig,
       JoinTypeUtil.getFlinkJoinType(joinType),
-      remainingCondition.orNull,
+      finalPreFilterCondition.orNull,
+      finalRemainingCondition.orNull,
       new TemporalTableSourceSpec(temporalTable),
       allLookupKeys.map(item => (Int.box(item._1), item._2)).asJava,
       projectionOnTemporalTable,
@@ -84,6 +96,7 @@ class BatchPhysicalLookupJoin(
       asyncOptions.orNull,
       InputProperty.DEFAULT,
       FlinkTypeFactory.toLogicalRowType(getRowType),
-      getRelDetailedDescription)
+      getRelDetailedDescription,
+      preferCustomShuffle)
   }
 }

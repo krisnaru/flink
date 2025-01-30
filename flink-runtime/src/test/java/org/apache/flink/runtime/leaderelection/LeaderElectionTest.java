@@ -45,6 +45,7 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static org.apache.flink.core.testutils.FlinkAssertions.assertThatFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for leader election. */
@@ -80,28 +81,38 @@ public class LeaderElectionTest {
     }
 
     @TestTemplate
-    void testHasLeadership() throws Exception {
-        final LeaderElectionService leaderElectionService =
-                serviceClass.createLeaderElectionService();
+    void testHasLeadershipAsync() throws Exception {
         final ManualLeaderContender manualLeaderContender = new ManualLeaderContender();
 
         try {
-            assertThat(leaderElectionService.hasLeadership(UUID.randomUUID())).isFalse();
-
-            leaderElectionService.start(manualLeaderContender);
+            final LeaderElection leaderElection = serviceClass.createLeaderElection();
+            leaderElection.startLeaderElection(manualLeaderContender);
 
             final UUID leaderSessionId = manualLeaderContender.waitForLeaderSessionId();
 
-            assertThat(leaderElectionService.hasLeadership(leaderSessionId)).isTrue();
-            assertThat(leaderElectionService.hasLeadership(UUID.randomUUID())).isFalse();
+            assertThatFuture(leaderElection.hasLeadershipAsync(leaderSessionId))
+                    .eventuallySucceeds()
+                    .isEqualTo(true);
+            assertThatFuture(leaderElection.hasLeadershipAsync(UUID.randomUUID()))
+                    .eventuallySucceeds()
+                    .isEqualTo(false);
 
-            leaderElectionService.confirmLeadership(leaderSessionId, "foobar");
+            assertThatFuture(leaderElection.confirmLeadershipAsync(leaderSessionId, "foobar"))
+                    .eventuallySucceeds();
 
-            assertThat(leaderElectionService.hasLeadership(leaderSessionId)).isTrue();
+            assertThatFuture(leaderElection.hasLeadershipAsync(leaderSessionId))
+                    .eventuallySucceeds()
+                    .isEqualTo(true);
 
-            leaderElectionService.stop();
+            leaderElection.close();
 
-            assertThat(leaderElectionService.hasLeadership(leaderSessionId)).isFalse();
+            assertThatFuture(leaderElection.hasLeadershipAsync(leaderSessionId))
+                    .eventuallySucceeds()
+                    .isEqualTo(false);
+
+            assertThat(manualLeaderContender.waitForLeaderSessionId())
+                    .as("The leadership has been revoked from the contender.")
+                    .isEqualTo(ManualLeaderContender.NULL_LEADER_SESSION_ID);
         } finally {
             manualLeaderContender.rethrowError();
         }
@@ -126,11 +137,6 @@ public class LeaderElectionTest {
         }
 
         @Override
-        public String getDescription() {
-            return "foobar";
-        }
-
-        @Override
         public void handleError(Exception exception) {
             this.exception = exception;
         }
@@ -151,7 +157,7 @@ public class LeaderElectionTest {
 
         void teardown() throws Exception;
 
-        LeaderElectionService createLeaderElectionService() throws Exception;
+        LeaderElection createLeaderElection() throws Exception;
     }
 
     private static final class ZooKeeperServiceClass implements ServiceClass {
@@ -160,8 +166,10 @@ public class LeaderElectionTest {
 
         private CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper;
 
+        private DefaultLeaderElectionService leaderElectionService;
+
         @Override
-        public void setup(FatalErrorHandler fatalErrorHandler) {
+        public void setup(FatalErrorHandler fatalErrorHandler) throws Exception {
             try {
                 testingServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
             } catch (Exception e) {
@@ -170,16 +178,25 @@ public class LeaderElectionTest {
 
             final Configuration configuration = new Configuration();
 
-            configuration.setString(
+            configuration.set(
                     HighAvailabilityOptions.HA_ZOOKEEPER_QUORUM, testingServer.getConnectString());
-            configuration.setString(HighAvailabilityOptions.HA_MODE, "zookeeper");
+            configuration.set(HighAvailabilityOptions.HA_MODE, "zookeeper");
 
             curatorFrameworkWrapper =
                     ZooKeeperUtils.startCuratorFramework(configuration, fatalErrorHandler);
+
+            final LeaderElectionDriverFactory driverFactory =
+                    new ZooKeeperLeaderElectionDriverFactory(
+                            curatorFrameworkWrapper.asCuratorFramework());
+            leaderElectionService = new DefaultLeaderElectionService(driverFactory);
         }
 
         @Override
         public void teardown() throws Exception {
+            if (leaderElectionService != null) {
+                leaderElectionService.close();
+            }
+
             if (curatorFrameworkWrapper != null) {
                 curatorFrameworkWrapper.close();
                 curatorFrameworkWrapper = null;
@@ -192,9 +209,8 @@ public class LeaderElectionTest {
         }
 
         @Override
-        public LeaderElectionService createLeaderElectionService() {
-            return ZooKeeperUtils.createLeaderElectionService(
-                    curatorFrameworkWrapper.asCuratorFramework());
+        public LeaderElection createLeaderElection() {
+            return leaderElectionService.createLeaderElection("random-component-id");
         }
     }
 
@@ -215,8 +231,8 @@ public class LeaderElectionTest {
         }
 
         @Override
-        public LeaderElectionService createLeaderElectionService() {
-            return embeddedLeaderService.createLeaderElectionService();
+        public LeaderElection createLeaderElection() {
+            return embeddedLeaderService.createLeaderElectionService("embedded_leader_election");
         }
     }
 
@@ -233,8 +249,8 @@ public class LeaderElectionTest {
         }
 
         @Override
-        public LeaderElectionService createLeaderElectionService() {
-            return new StandaloneLeaderElectionService();
+        public LeaderElection createLeaderElection() {
+            return new StandaloneLeaderElection(UUID.randomUUID());
         }
     }
 }

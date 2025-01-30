@@ -18,17 +18,19 @@
 package org.apache.flink.table.planner.plan.schema
 
 import org.apache.flink.configuration.ReadableConfig
-import org.apache.flink.table.api.{TableException, ValidationException}
-import org.apache.flink.table.api.TableColumn.ComputedColumn
+import org.apache.flink.legacy.table.sources.StreamTableSource
+import org.apache.flink.table.api.{Schema, TableException, ValidationException}
 import org.apache.flink.table.api.config.TableConfigOptions
-import org.apache.flink.table.catalog.{CatalogTable, CatalogTableImpl}
+import org.apache.flink.table.catalog.{CatalogTable, ResolvedCatalogTable}
 import org.apache.flink.table.factories.TableFactoryUtil
+import org.apache.flink.table.legacy.api.TableColumn.ComputedColumn
+import org.apache.flink.table.legacy.sources.TableSource
 import org.apache.flink.table.planner.JMap
 import org.apache.flink.table.planner.calcite.{FlinkRelBuilder, FlinkTypeFactory}
 import org.apache.flink.table.planner.catalog.CatalogSchemaTable
 import org.apache.flink.table.planner.hint.FlinkHints
 import org.apache.flink.table.planner.utils.ShortcutUtils.unwrapContext
-import org.apache.flink.table.sources.{StreamTableSource, TableSource, TableSourceValidation}
+import org.apache.flink.table.sources.TableSourceValidation
 import org.apache.flink.table.types.logical.{LocalZonedTimestampType, TimestampKind, TimestampType}
 import org.apache.flink.table.utils.TableSchemaUtils
 
@@ -174,15 +176,23 @@ class LegacyCatalogSourceTable[T](
       catalogTable
     }
     val identifier = schemaTable.getContextResolvedTable.getIdentifier
+    val resolvedSchemaWithRemovedTimeAttribute =
+      TableSchemaUtils.removeTimeAttributeFromResolvedSchema(
+        schemaTable.getContextResolvedTable.getResolvedSchema)
     val tableSource = TableFactoryUtil.findAndCreateTableSource(
-      schemaTable.getContextResolvedTable.getCatalog.orElse(null),
       identifier,
-      new CatalogTableImpl(
-        TableSchemaUtils.removeTimeAttributeFromResolvedSchema(
-          schemaTable.getContextResolvedTable.getResolvedSchema),
-        tableToFind.getPartitionKeys,
-        tableToFind.getOptions,
-        tableToFind.getComment),
+      new ResolvedCatalogTable(
+        CatalogTable
+          .newBuilder()
+          .schema(
+            Schema.newBuilder
+              .fromResolvedSchema(resolvedSchemaWithRemovedTimeAttribute)
+              .build())
+          .comment(tableToFind.getComment)
+          .partitionKeys(tableToFind.getPartitionKeys)
+          .options(tableToFind.getOptions)
+          .build(),
+        resolvedSchemaWithRemovedTimeAttribute),
       conf,
       schemaTable.isTemporary
     )

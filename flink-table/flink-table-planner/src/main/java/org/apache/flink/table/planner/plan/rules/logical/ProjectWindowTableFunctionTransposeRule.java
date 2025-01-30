@@ -19,7 +19,9 @@
 package org.apache.flink.table.planner.plan.rules.logical;
 
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
+import org.apache.flink.table.planner.calcite.RexTableArgCall;
 import org.apache.flink.table.planner.functions.sql.SqlWindowTableFunction;
+import org.apache.flink.table.planner.plan.logical.SessionWindowSpec;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.utils.WindowUtil;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -41,9 +43,9 @@ import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Pair;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -77,8 +79,7 @@ public class ProjectWindowTableFunctionTransposeRule extends RelOptRule {
         LogicalTableFunctionScan scan = call.rel(1);
         RelNode scanInput = scan.getInput(0);
         TimeAttributeWindowingStrategy windowingStrategy =
-                WindowUtil.convertToWindowingStrategy(
-                        (RexCall) scan.getCall(), scanInput.getRowType());
+                WindowUtil.convertToWindowingStrategy((RexCall) scan.getCall(), scanInput);
         // 1. get fields to push down
         ImmutableBitSet projectFields = RelOptUtil.InputFinder.bits(project.getProjects(), null);
         int scanInputFieldCount = scanInput.getRowType().getFieldCount();
@@ -86,6 +87,12 @@ public class ProjectWindowTableFunctionTransposeRule extends RelOptRule {
                 ImmutableBitSet.range(0, scanInputFieldCount)
                         .intersect(projectFields)
                         .set(windowingStrategy.getTimeAttributeIndex());
+        // partition keys in session window tvf also need be pushed down
+        if (windowingStrategy.getWindow() instanceof SessionWindowSpec) {
+            SessionWindowSpec sessionWindowSpec = (SessionWindowSpec) windowingStrategy.getWindow();
+            int[] partitionKeyIndices = sessionWindowSpec.getPartitionKeyIndices();
+            toPushFields = toPushFields.union(ImmutableBitSet.of(partitionKeyIndices));
+        }
         if (toPushFields.cardinality() == scanInputFieldCount) {
             return;
         }
@@ -147,7 +154,6 @@ public class ProjectWindowTableFunctionTransposeRule extends RelOptRule {
             RelNode newInput,
             Map<Integer, Integer> mapping) {
         relBuilder.push(newInput);
-        RexNode newCall = rewriteWindowCall((RexCall) oldScan.getCall(), mapping, relBuilder);
         RelOptCluster cluster = oldScan.getCluster();
         FlinkTypeFactory typeFactory = (FlinkTypeFactory) cluster.getTypeFactory();
         RelDataType newScanOutputType =
@@ -155,6 +161,14 @@ public class ProjectWindowTableFunctionTransposeRule extends RelOptRule {
                         typeFactory,
                         newInput.getRowType(),
                         typeFactory.createFieldTypeFromLogicalType(timeAttributeType));
+        RexNode newCall =
+                rewriteWindowCall(
+                        newInput.getRowType(),
+                        (RexCall) oldScan.getCall(),
+                        mapping,
+                        newScanOutputType,
+                        relBuilder);
+
         return LogicalTableFunctionScan.create(
                 cluster,
                 new ArrayList<>(Collections.singleton(newInput)),
@@ -165,18 +179,24 @@ public class ProjectWindowTableFunctionTransposeRule extends RelOptRule {
     }
 
     private RexNode rewriteWindowCall(
-            RexCall windowCall, Map<Integer, Integer> mapping, RelBuilder relBuilder) {
+            RelDataType newInputType,
+            RexCall windowCall,
+            Map<Integer, Integer> mapping,
+            RelDataType newScanOutputType,
+            RelBuilder relBuilder) {
         List<RexNode> newOperands = new ArrayList<>();
-        Iterator<RexNode> operandsItr = windowCall.getOperands().iterator();
-        // Note: skip to rewrite the first operand of window table function because it is a special
-        // ref to a table instead of a normal input ref, if process it as a regular input ref, an
-        // exception would be thrown out. It's safe to use first operand of function because
-        // framework never use it (or avoid to use it).
-        newOperands.add(operandsItr.next());
-        while (operandsItr.hasNext()) {
-            newOperands.add(adjustInputRef(operandsItr.next(), mapping));
+        for (RexNode next : windowCall.getOperands()) {
+            newOperands.add(adjustInputRef(next, mapping));
         }
-        return relBuilder.call(windowCall.getOperator(), newOperands);
+
+        RexTableArgCall tableArgCall = (RexTableArgCall) windowCall.operands.get(0);
+        int[] newPartitionKeys =
+                Arrays.stream(tableArgCall.getPartitionKeys()).map(mapping::get).toArray();
+        int[] newOrderKeys = Arrays.stream(tableArgCall.getOrderKeys()).map(mapping::get).toArray();
+        newOperands.set(0, tableArgCall.copy(newInputType, newPartitionKeys, newOrderKeys));
+        return relBuilder
+                .getRexBuilder()
+                .makeCall(newScanOutputType, windowCall.getOperator(), newOperands);
     }
 
     private RelNode createTopProject(

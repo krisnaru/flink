@@ -68,7 +68,10 @@ public class VertexwiseSchedulingStrategy
         this.schedulingTopology = checkNotNull(schedulingTopology);
         this.inputConsumableDecider =
                 inputConsumableDeciderFactory.createInstance(
-                        schedulingTopology, scheduledVertices::contains);
+                        schedulingTopology,
+                        scheduledVertices::contains,
+                        (executionVertexId) ->
+                                schedulingTopology.getVertex(executionVertexId).getState());
         LOG.info(
                 "Using InputConsumableDecider {} for VertexwiseSchedulingStrategy.",
                 inputConsumableDecider.getClass().getName());
@@ -103,6 +106,11 @@ public class VertexwiseSchedulingStrategy
                     IterableUtils.toStream(executionVertex.getProducedResults())
                             .map(SchedulingResultPartition::getConsumerVertexGroups)
                             .flatMap(Collection::stream)
+                            .filter(
+                                    group ->
+                                            inputConsumableDecider
+                                                    .isConsumableBasedOnFinishedProducers(
+                                                            group.getConsumedPartitionGroup()))
                             .flatMap(IterableUtils::toStream)
                             .collect(Collectors.toSet());
 
@@ -139,6 +147,18 @@ public class VertexwiseSchedulingStrategy
 
         scheduleVerticesOneByOne(verticesToSchedule);
         scheduledVertices.addAll(verticesToSchedule);
+    }
+
+    @Override
+    public void scheduleAllVerticesIfPossible() {
+        newVertices.clear();
+        Set<ExecutionVertexID> verticesToSchedule =
+                IterableUtils.toStream(schedulingTopology.getVertices())
+                        .filter(vertex -> !vertex.getState().equals(ExecutionState.FINISHED))
+                        .map(SchedulingExecutionVertex::getId)
+                        .collect(Collectors.toSet());
+
+        maybeScheduleVertices(verticesToSchedule);
     }
 
     private Set<ExecutionVertexID> addToScheduleAndGetVertices(

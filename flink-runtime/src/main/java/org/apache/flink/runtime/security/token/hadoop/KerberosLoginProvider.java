@@ -59,7 +59,7 @@ public class KerberosLoginProvider {
         this.useTicketCache = securityConfiguration.useTicketCache();
     }
 
-    public boolean isLoginPossible() throws IOException {
+    public boolean isLoginPossible(boolean supportProxyUser) throws IOException {
         if (UserGroupInformation.isSecurityEnabled()) {
             LOG.debug("Security is enabled");
         } else {
@@ -67,16 +67,16 @@ public class KerberosLoginProvider {
             return false;
         }
 
-        UserGroupInformation currentUser = UserGroupInformation.getCurrentUser();
-
         if (principal != null) {
             LOG.debug("Login from keytab is possible");
             return true;
-        } else if (!HadoopUserUtils.isProxyUser(currentUser)) {
-            if (useTicketCache && currentUser.hasKerberosCredentials()) {
+        } else if (!HadoopUserUtils.isProxyUser(UserGroupInformation.getCurrentUser())) {
+            if (useTicketCache && UserGroupInformation.getCurrentUser().hasKerberosCredentials()) {
                 LOG.debug("Login from ticket cache is possible");
                 return true;
             }
+        } else if (supportProxyUser) {
+            return true;
         } else {
             throwProxyUserNotSupported();
         }
@@ -89,7 +89,7 @@ public class KerberosLoginProvider {
     /**
      * Does kerberos login and sets current user. Must be called when isLoginPossible returns true.
      */
-    public void doLogin() throws IOException {
+    public void doLogin(boolean supportProxyUser) throws IOException {
         if (principal != null) {
             LOG.info(
                     "Attempting to login to KDC using principal: {} keytab: {}", principal, keytab);
@@ -99,6 +99,8 @@ public class KerberosLoginProvider {
             LOG.info("Attempting to load user's ticket cache");
             UserGroupInformation.loginUserFromSubject(null);
             LOG.info("Loaded user's ticket cache successfully");
+        } else if (supportProxyUser) {
+            LOG.info("Proxy user doesn't need login since it must have credentials already");
         } else {
             throwProxyUserNotSupported();
         }

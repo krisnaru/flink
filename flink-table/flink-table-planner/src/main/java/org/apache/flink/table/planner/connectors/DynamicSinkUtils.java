@@ -30,16 +30,20 @@ import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.TableConfigOptions;
+import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.Column.MetadataColumn;
 import org.apache.flink.table.catalog.ContextResolvedTable;
 import org.apache.flink.table.catalog.DataTypeFactory;
 import org.apache.flink.table.catalog.ExternalCatalogTable;
+import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.catalog.TableDistribution;
 import org.apache.flink.table.catalog.UnresolvedIdentifier;
 import org.apache.flink.table.connector.RowLevelModificationScanContext;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
+import org.apache.flink.table.connector.sink.abilities.SupportsBucketing;
 import org.apache.flink.table.connector.sink.abilities.SupportsOverwrite;
 import org.apache.flink.table.connector.sink.abilities.SupportsPartitioning;
 import org.apache.flink.table.connector.sink.abilities.SupportsRowLevelDelete;
@@ -50,9 +54,11 @@ import org.apache.flink.table.connector.source.abilities.SupportsReadingMetadata
 import org.apache.flink.table.operations.CollectModifyOperation;
 import org.apache.flink.table.operations.ExternalModifyOperation;
 import org.apache.flink.table.operations.SinkModifyOperation;
+import org.apache.flink.table.operations.ddl.CreateTableOperation;
 import org.apache.flink.table.planner.calcite.FlinkRelBuilder;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.functions.sql.FlinkSqlOperatorTable;
+import org.apache.flink.table.planner.plan.abilities.sink.BucketingSpec;
 import org.apache.flink.table.planner.plan.abilities.sink.OverwriteSpec;
 import org.apache.flink.table.planner.plan.abilities.sink.RowLevelDeleteSpec;
 import org.apache.flink.table.planner.plan.abilities.sink.RowLevelUpdateSpec;
@@ -148,7 +154,8 @@ public final class DynamicSinkUtils {
                         zoneId,
                         configuration
                                 .get(ExecutionConfigOptions.TABLE_EXEC_LEGACY_CAST_BEHAVIOUR)
-                                .isEnabled());
+                                .isEnabled(),
+                        configuration);
         collectModifyOperation.setSelectResultProvider(tableSink.getSelectResultProvider());
         collectModifyOperation.setConsumedDataType(consumedDataType);
         return convertSinkToRel(
@@ -157,6 +164,7 @@ public final class DynamicSinkUtils {
                 Collections.emptyMap(), // dynamicOptions
                 contextResolvedTable,
                 Collections.emptyMap(), // staticPartitions
+                null, // targetColumns
                 false,
                 tableSink);
     }
@@ -179,6 +187,7 @@ public final class DynamicSinkUtils {
                 Collections.emptyMap(),
                 externalModifyOperation.getContextResolvedTable(),
                 Collections.emptyMap(),
+                null, // targetColumns
                 false,
                 tableSink);
     }
@@ -198,7 +207,43 @@ public final class DynamicSinkUtils {
                 sinkModifyOperation.getDynamicOptions(),
                 sinkModifyOperation.getContextResolvedTable(),
                 sinkModifyOperation.getStaticPartitions(),
+                sinkModifyOperation.getTargetColumns(),
                 sinkModifyOperation.isOverwrite(),
+                sink);
+    }
+
+    /**
+     * Converts a given {@link DynamicTableSink} to a {@link RelNode}. It adds helper projections if
+     * necessary.
+     */
+    public static RelNode convertCreateTableAsToRel(
+            FlinkRelBuilder relBuilder,
+            RelNode input,
+            Catalog catalog,
+            CreateTableOperation createTableOperation,
+            Map<String, String> staticPartitions,
+            boolean isOverwrite,
+            DynamicTableSink sink) {
+        final ResolvedCatalogTable catalogTable = createTableOperation.getCatalogTable();
+
+        final ObjectIdentifier identifier = createTableOperation.getTableIdentifier();
+
+        final ContextResolvedTable contextResolvedTable;
+        if (createTableOperation.isTemporary()) {
+            contextResolvedTable = ContextResolvedTable.temporary(identifier, catalogTable);
+        } else {
+            contextResolvedTable =
+                    ContextResolvedTable.permanent(identifier, catalog, catalogTable);
+        }
+
+        return convertSinkToRel(
+                relBuilder,
+                input,
+                Collections.emptyMap(),
+                contextResolvedTable,
+                staticPartitions,
+                null,
+                isOverwrite,
                 sink);
     }
 
@@ -208,6 +253,7 @@ public final class DynamicSinkUtils {
             Map<String, String> dynamicOptions,
             ContextResolvedTable contextResolvedTable,
             Map<String, String> staticPartitions,
+            int[][] targetColumns,
             boolean isOverwrite,
             DynamicTableSink sink) {
         final DataTypeFactory dataTypeFactory =
@@ -289,6 +335,7 @@ public final class DynamicSinkUtils {
                 contextResolvedTable,
                 sink,
                 staticPartitions,
+                targetColumns,
                 sinkAbilitySpecs.toArray(new SinkAbilitySpec[0]));
     }
 
@@ -386,36 +433,37 @@ public final class DynamicSinkUtils {
         RowLevelModificationScanContext context = RowLevelModificationContextUtils.getScanContext();
         SupportsRowLevelDelete.RowLevelDeleteInfo rowLevelDeleteInfo =
                 supportsRowLevelDelete.applyRowLevelDelete(context);
-        sinkAbilitySpecs.add(
-                new RowLevelDeleteSpec(rowLevelDeleteInfo.getRowLevelDeleteMode(), context));
 
         if (rowLevelDeleteInfo.getRowLevelDeleteMode()
-                == SupportsRowLevelDelete.RowLevelDeleteMode.DELETED_ROWS) {
-            // convert the LogicalTableModify node to a rel node representing row-level delete
-            return convertToRowLevelDelete(
-                    tableModify,
-                    contextResolvedTable,
-                    rowLevelDeleteInfo,
-                    tableDebugName,
-                    dataTypeFactory,
-                    typeFactory);
-        } else if (rowLevelDeleteInfo.getRowLevelDeleteMode()
+                        != SupportsRowLevelDelete.RowLevelDeleteMode.DELETED_ROWS
+                && rowLevelDeleteInfo.getRowLevelDeleteMode()
+                        != SupportsRowLevelDelete.RowLevelDeleteMode.REMAINING_ROWS) {
+            throw new TableException(
+                    "Unknown delete mode: " + rowLevelDeleteInfo.getRowLevelDeleteMode());
+        }
+
+        if (rowLevelDeleteInfo.getRowLevelDeleteMode()
                 == SupportsRowLevelDelete.RowLevelDeleteMode.REMAINING_ROWS) {
             // if it's for remaining row, convert the predicate in where clause
             // to the negative predicate
             convertPredicateToNegative(tableModify);
-            // convert the LogicalTableModify node to a rel node representing row-level delete
-            return convertToRowLevelDelete(
-                    tableModify,
-                    contextResolvedTable,
-                    rowLevelDeleteInfo,
-                    tableDebugName,
-                    dataTypeFactory,
-                    typeFactory);
-        } else {
-            throw new TableException(
-                    "Unknown delete mode: " + rowLevelDeleteInfo.getRowLevelDeleteMode());
         }
+
+        // convert the LogicalTableModify node to a RelNode representing row-level delete
+        Tuple2<RelNode, int[]> deleteRelNodeAndRequireIndices =
+                convertToRowLevelDelete(
+                        tableModify,
+                        contextResolvedTable,
+                        rowLevelDeleteInfo,
+                        tableDebugName,
+                        dataTypeFactory,
+                        typeFactory);
+        sinkAbilitySpecs.add(
+                new RowLevelDeleteSpec(
+                        rowLevelDeleteInfo.getRowLevelDeleteMode(),
+                        context,
+                        deleteRelNodeAndRequireIndices.f1));
+        return deleteRelNodeAndRequireIndices.f0;
     }
 
     private static RelNode convertUpdate(
@@ -445,16 +493,21 @@ public final class DynamicSinkUtils {
             throw new IllegalArgumentException(
                     "Unknown update mode:" + updateInfo.getRowLevelUpdateMode());
         }
+        Tuple2<RelNode, int[]> updateRelNodeAndRequireIndices =
+                convertToRowLevelUpdate(
+                        tableModify,
+                        contextResolvedTable,
+                        updateInfo,
+                        tableDebugName,
+                        dataTypeFactory,
+                        typeFactory);
         sinkAbilitySpecs.add(
                 new RowLevelUpdateSpec(
-                        updatedColumns, updateInfo.getRowLevelUpdateMode(), context));
-        return convertToRowLevelUpdate(
-                tableModify,
-                contextResolvedTable,
-                updateInfo,
-                tableDebugName,
-                dataTypeFactory,
-                typeFactory);
+                        updatedColumns,
+                        updateInfo.getRowLevelUpdateMode(),
+                        context,
+                        updateRelNodeAndRequireIndices.f1));
+        return updateRelNodeAndRequireIndices.f0;
     }
 
     private static List<Column> getUpdatedColumns(
@@ -469,8 +522,13 @@ public final class DynamicSinkUtils {
         return updatedColumns;
     }
 
-    /** Convert tableModify node to a rel node representing for row-level delete. */
-    private static RelNode convertToRowLevelDelete(
+    /**
+     * Convert tableModify node to a RelNode representing for row-level delete.
+     *
+     * @return a tuple contains the RelNode and the index for the required physical columns for
+     *     row-level delete.
+     */
+    private static Tuple2<RelNode, int[]> convertToRowLevelDelete(
             LogicalTableModify tableModify,
             ContextResolvedTable contextResolvedTable,
             SupportsRowLevelDelete.RowLevelDeleteInfo rowLevelDeleteInfo,
@@ -495,14 +553,25 @@ public final class DynamicSinkUtils {
                     addExtraMetaCols(
                             tableModify, tableScan, tableDebugName, metadataColumns, typeFactory);
         }
+
         // create a project only select the required columns for delete
-        return projectColumnsForDelete(
-                tableModify,
-                resolvedSchema,
-                colIndexes,
-                tableDebugName,
-                dataTypeFactory,
-                typeFactory);
+        return Tuple2.of(
+                projectColumnsForDelete(
+                        tableModify,
+                        resolvedSchema,
+                        colIndexes,
+                        tableDebugName,
+                        dataTypeFactory,
+                        typeFactory),
+                getPhysicalColumnIndices(colIndexes, resolvedSchema));
+    }
+
+    /** Return the indices from {@param colIndexes} that belong to physical column. */
+    private static int[] getPhysicalColumnIndices(List<Integer> colIndexes, ResolvedSchema schema) {
+        return colIndexes.stream()
+                .filter(i -> schema.getColumns().get(i).isPhysical())
+                .mapToInt(i -> i)
+                .toArray();
     }
 
     /** Convert the predicate in WHERE clause to the negative predicate. */
@@ -606,8 +675,13 @@ public final class DynamicSinkUtils {
         return (LogicalTableScan) relNode;
     }
 
-    /** Convert tableModify node to a RelNode representing for row-level update. */
-    private static RelNode convertToRowLevelUpdate(
+    /**
+     * Convert tableModify node to a RelNode representing for row-level update.
+     *
+     * @return a tuple contains the RelNode and the index for the required physical columns for
+     *     row-level update.
+     */
+    private static Tuple2<RelNode, int[]> convertToRowLevelUpdate(
             LogicalTableModify tableModify,
             ContextResolvedTable contextResolvedTable,
             SupportsRowLevelUpdate.RowLevelUpdateInfo rowLevelUpdateInfo,
@@ -622,7 +696,7 @@ public final class DynamicSinkUtils {
         LogicalTableScan tableScan = getSourceTableScan(tableModify);
         Tuple2<List<Integer>, List<MetadataColumn>> colsIndexAndExtraMetaCols =
                 getRequireColumnsIndexAndExtraMetaCols(tableScan, requiredColumns, resolvedSchema);
-        List<Integer> updatedIndexes = colsIndexAndExtraMetaCols.f0;
+        List<Integer> colIndexes = colsIndexAndExtraMetaCols.f0;
         List<MetadataColumn> metadataColumns = colsIndexAndExtraMetaCols.f1;
         // if meta columns size is greater than 0, we need to modify the underlying
         // LogicalTableScan to make it can read meta column
@@ -632,16 +706,17 @@ public final class DynamicSinkUtils {
                     addExtraMetaCols(
                             tableModify, tableScan, tableDebugName, metadataColumns, typeFactory);
         }
-
-        return projectColumnsForUpdate(
-                tableModify,
-                originColsCount,
-                resolvedSchema,
-                updatedIndexes,
-                rowLevelUpdateInfo.getRowLevelUpdateMode(),
-                tableDebugName,
-                dataTypeFactory,
-                typeFactory);
+        return Tuple2.of(
+                projectColumnsForUpdate(
+                        tableModify,
+                        originColsCount,
+                        resolvedSchema,
+                        colIndexes,
+                        rowLevelUpdateInfo.getRowLevelUpdateMode(),
+                        tableDebugName,
+                        dataTypeFactory,
+                        typeFactory),
+                getPhysicalColumnIndices(colIndexes, resolvedSchema));
     }
 
     // create a project only select the required column or expression for update
@@ -771,8 +846,10 @@ public final class DynamicSinkUtils {
             project.replaceInput(0, newTableScan);
         }
         // validate and apply metadata
+        // TODO FLINK-33083 we should not ignore the produced abilities but actually put those into
+        //  the table scan
         DynamicSourceUtils.validateAndApplyMetadata(
-                tableDebugName, resolvedSchema, newTableSourceTab.tableSource());
+                tableDebugName, resolvedSchema, newTableSourceTab.tableSource(), new ArrayList<>());
         return resolvedSchema;
     }
 
@@ -909,8 +986,8 @@ public final class DynamicSinkUtils {
     }
 
     /**
-     * Prepares the given {@link DynamicTableSink}. It check whether the sink is compatible with the
-     * INSERT INTO clause and applies initial parameters.
+     * Prepares the given {@link DynamicTableSink}. It checks whether the sink is compatible with
+     * the INSERT INTO clause and applies initial parameters.
      */
     private static void prepareDynamicSink(
             String tableDebugName,
@@ -919,6 +996,12 @@ public final class DynamicSinkUtils {
             DynamicTableSink sink,
             ResolvedCatalogTable table,
             List<SinkAbilitySpec> sinkAbilitySpecs) {
+        table.getDistribution()
+                .ifPresent(
+                        distribution ->
+                                validateBucketing(
+                                        tableDebugName, sink, distribution, sinkAbilitySpecs));
+
         validatePartitioning(tableDebugName, staticPartitions, sink, table.getPartitionKeys());
 
         validateAndApplyOverwrite(tableDebugName, isOverwrite, sink, sinkAbilitySpecs);
@@ -992,6 +1075,51 @@ public final class DynamicSinkUtils {
                 TypeTransformations.legacyRawToTypeInfoRaw(),
                 TypeTransformations.legacyToNonLegacy(),
                 TypeTransformations.toNullable());
+    }
+
+    private static void validateBucketing(
+            String tableDebugName,
+            DynamicTableSink sink,
+            TableDistribution distribution,
+            List<SinkAbilitySpec> sinkAbilitySpecs) {
+        if (!(sink instanceof SupportsBucketing)) {
+            throw new TableException(
+                    String.format(
+                            "Table '%s' is distributed into buckets, but the underlying %s doesn't "
+                                    + "implement the %s interface.",
+                            tableDebugName,
+                            DynamicTableSink.class.getSimpleName(),
+                            SupportsBucketing.class.getSimpleName()));
+        }
+        SupportsBucketing sinkWithBucketing = (SupportsBucketing) sink;
+        if (sinkWithBucketing.requiresBucketCount() && !distribution.getBucketCount().isPresent()) {
+            throw new ValidationException(
+                    String.format(
+                            "Table '%s' is a bucketed table, but the underlying %s requires the number of buckets to be set.",
+                            tableDebugName, DynamicTableSink.class.getSimpleName()));
+        }
+        if (!sinkWithBucketing.listAlgorithms().contains(distribution.getKind())) {
+            if (distribution.getKind() == TableDistribution.Kind.UNKNOWN) {
+                throw new ValidationException(
+                        String.format(
+                                "Bucketed table '%s' must specify an algorithm. Supported algorithms: %s",
+                                tableDebugName,
+                                sinkWithBucketing.listAlgorithms().stream()
+                                        .map(TableDistribution.Kind::toString)
+                                        .sorted()
+                                        .collect(Collectors.toList())));
+            }
+            throw new ValidationException(
+                    String.format(
+                            "Table '%s' is a bucketed table and it supports %s, but algorithm %s was requested.",
+                            tableDebugName,
+                            sinkWithBucketing.listAlgorithms().stream()
+                                    .map(TableDistribution.Kind::toString)
+                                    .sorted()
+                                    .collect(Collectors.toList()),
+                            distribution.getKind()));
+        }
+        sinkAbilitySpecs.add(new BucketingSpec());
     }
 
     private static void validatePartitioning(

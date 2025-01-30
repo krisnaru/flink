@@ -23,6 +23,7 @@ import org.apache.flink.client.program.PerJobMiniClusterFactory;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.DeploymentOptions;
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.core.testutils.FlinkAssertions;
 import org.apache.flink.runtime.dispatcher.Dispatcher;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobGraphTestUtils;
@@ -40,9 +41,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for client's heartbeat. */
-public class ClientHeartbeatTest {
+class ClientHeartbeatTest {
     private final long clientHeartbeatInterval = 50;
-    private final long clientHeartbeatTimeout = 500;
+    private final long clientHeartbeatTimeout = 1000;
 
     private MiniCluster miniCluster;
 
@@ -59,9 +60,8 @@ public class ClientHeartbeatTest {
 
         // The client doesn't report heartbeat to the dispatcher.
 
-        assertThat(jobClient.getJobExecutionResult())
-                .failsWithin(Duration.ofSeconds(1))
-                .withThrowableOfType(ExecutionException.class)
+        FlinkAssertions.assertThatFuture(jobClient.getJobExecutionResult())
+                .eventuallyFailsWith(ExecutionException.class)
                 .withMessageContaining("Job was cancelled");
 
         assertThat(miniCluster.isRunning()).isFalse();
@@ -94,10 +94,10 @@ public class ClientHeartbeatTest {
         Configuration configuration = new Configuration();
         configuration.set(
                 Dispatcher.CLIENT_ALIVENESS_CHECK_DURATION,
-                Duration.ofMillis(clientHeartbeatTimeout));
+                Duration.ofMillis(clientHeartbeatInterval));
         if (shutdownOnAttachedExit) {
-            configuration.setBoolean(DeploymentOptions.ATTACHED, true);
-            configuration.setBoolean(DeploymentOptions.SHUTDOWN_IF_ATTACHED, true);
+            configuration.set(DeploymentOptions.ATTACHED, true);
+            configuration.set(DeploymentOptions.SHUTDOWN_IF_ATTACHED, true);
         }
         return configuration;
     }
@@ -115,8 +115,8 @@ public class ClientHeartbeatTest {
         JobGraph cancellableJobGraph = getCancellableJobGraph();
         // Enable heartbeat only when both execution.attached and
         // execution.shutdown-on-attached-exit are true.
-        if (configuration.getBoolean(DeploymentOptions.ATTACHED)
-                && configuration.getBoolean(DeploymentOptions.SHUTDOWN_IF_ATTACHED)) {
+        if (configuration.get(DeploymentOptions.ATTACHED)
+                && configuration.get(DeploymentOptions.SHUTDOWN_IF_ATTACHED)) {
             cancellableJobGraph.setInitialClientHeartbeatTimeout(clientHeartbeatTimeout);
         }
         return perJobMiniClusterFactory

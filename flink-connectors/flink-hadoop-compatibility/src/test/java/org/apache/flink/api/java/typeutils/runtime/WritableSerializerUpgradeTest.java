@@ -20,13 +20,13 @@ package org.apache.flink.api.java.typeutils.runtime;
 
 import org.apache.flink.FlinkVersion;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.TypeSerializerMatchers;
+import org.apache.flink.api.common.typeutils.TypeSerializerConditions;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerUpgradeTestBase;
 import org.apache.flink.api.java.typeutils.runtime.WritableSerializerUpgradeTest.WritableName;
 
 import org.apache.hadoop.io.Writable;
-import org.hamcrest.Matcher;
+import org.assertj.core.api.Condition;
 
 import java.io.DataInput;
 import java.io.DataOutput;
@@ -35,23 +35,20 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Objects;
 
-import static org.hamcrest.Matchers.is;
-
 /** A {@link TypeSerializerUpgradeTestBase} for {@link WritableSerializer}. */
 class WritableSerializerUpgradeTest
         extends TypeSerializerUpgradeTestBase<WritableName, WritableName> {
 
-    public Collection<TestSpecification<?, ?>> createTestSpecifications() throws Exception {
+    public Collection<TestSpecification<?, ?>> createTestSpecifications(FlinkVersion flinkVersion)
+            throws Exception {
 
         ArrayList<TestSpecification<?, ?>> testSpecifications = new ArrayList<>();
-        for (FlinkVersion flinkVersion : MIGRATION_VERSIONS) {
-            testSpecifications.add(
-                    new TestSpecification<>(
-                            "writeable-serializer",
-                            flinkVersion,
-                            WritableSerializerSetup.class,
-                            WritableSerializerVerifier.class));
-        }
+        testSpecifications.add(
+                new TestSpecification<>(
+                        "writeable-serializer",
+                        flinkVersion,
+                        WritableSerializerSetup.class,
+                        WritableSerializerVerifier.class));
         return testSpecifications;
     }
 
@@ -130,16 +127,16 @@ class WritableSerializerUpgradeTest
         }
 
         @Override
-        public Matcher<WritableName> testDataMatcher() {
+        public Condition<WritableName> testDataCondition() {
             WritableName writable = new WritableName();
             writable.setName("flink");
-            return is(writable);
+            return new Condition<>(writable::equals, "writable is " + writable);
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<WritableName>> schemaCompatibilityMatcher(
-                FlinkVersion version) {
-            return TypeSerializerMatchers.isCompatibleAsIs();
+        public Condition<TypeSerializerSchemaCompatibility<WritableName>>
+                schemaCompatibilityCondition(FlinkVersion version) {
+            return TypeSerializerConditions.isCompatibleAsIs();
         }
     }
 }

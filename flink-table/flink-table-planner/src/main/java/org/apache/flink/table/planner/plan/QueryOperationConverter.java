@@ -19,9 +19,10 @@
 package org.apache.flink.table.planner.plan;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.legacy.table.sources.StreamTableSource;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.table.api.TableException;
-import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.table.calcite.bridge.PlannerExternalQueryOperation;
 import org.apache.flink.table.catalog.CatalogManager;
 import org.apache.flink.table.catalog.ConnectorCatalogTable;
 import org.apache.flink.table.catalog.ContextResolvedFunction;
@@ -40,6 +41,9 @@ import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
 import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.TableFunction;
 import org.apache.flink.table.functions.TableFunctionDefinition;
+import org.apache.flink.table.legacy.api.TableSchema;
+import org.apache.flink.table.legacy.sources.LookupableTableSource;
+import org.apache.flink.table.legacy.sources.TableSource;
 import org.apache.flink.table.operations.AggregateQueryOperation;
 import org.apache.flink.table.operations.CalculatedQueryOperation;
 import org.apache.flink.table.operations.DataStreamQueryOperation;
@@ -89,9 +93,6 @@ import org.apache.flink.table.runtime.groupwindow.RowtimeAttribute;
 import org.apache.flink.table.runtime.groupwindow.WindowEnd;
 import org.apache.flink.table.runtime.groupwindow.WindowReference;
 import org.apache.flink.table.runtime.groupwindow.WindowStart;
-import org.apache.flink.table.sources.LookupableTableSource;
-import org.apache.flink.table.sources.StreamTableSource;
-import org.apache.flink.table.sources.TableSource;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.Preconditions;
 
@@ -114,7 +115,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -356,12 +356,6 @@ public class QueryOperationConverter extends QueryOperationDefaultVisitor<RelNod
                                 relBuilder, contextResolvedTable, isBatchMode)
                         .toRel(ViewExpanders.simpleContext(relBuilder.getCluster()));
             }
-            Map<String, String> dynamicOptions = queryOperation.getDynamicOptions();
-            if (dynamicOptions != null) {
-                return relBuilder
-                        .scan(contextResolvedTable.getIdentifier(), dynamicOptions)
-                        .build();
-            }
             return relBuilder
                     .scan(queryOperation.getContextResolvedTable().getIdentifier().toList())
                     .build();
@@ -443,6 +437,8 @@ public class QueryOperationConverter extends QueryOperationDefaultVisitor<RelNod
         public RelNode visit(QueryOperation other) {
             if (other instanceof PlannerQueryOperation) {
                 return ((PlannerQueryOperation) other).getCalciteTree();
+            } else if (other instanceof PlannerExternalQueryOperation) {
+                return ((PlannerExternalQueryOperation) other).getCalciteTree();
             } else if (other instanceof InternalDataStreamQueryOperation) {
                 return convertToDataStreamScan((InternalDataStreamQueryOperation<?>) other);
             } else if (other instanceof ExternalQueryOperation) {

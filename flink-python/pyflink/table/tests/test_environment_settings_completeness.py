@@ -37,7 +37,8 @@ class EnvironmentSettingsCompletenessTests(PythonAPICompletenessTestCase, PyFlin
     @classmethod
     def excluded_methods(cls):
         # internal interfaces, no need to expose to users.
-        return {'getPlanner', 'getExecutor', 'getUserClassLoader'}
+        return {'getPlanner', 'getExecutor', 'getUserClassLoader', 'getCatalogStore',
+                'toConfiguration', 'fromConfiguration'}
 
 
 class EnvironmentSettingsBuilderCompletenessTests(PythonAPICompletenessTestCase, PyFlinkTestCase):
@@ -57,7 +58,7 @@ class EnvironmentSettingsBuilderCompletenessTests(PythonAPICompletenessTestCase,
     @classmethod
     def excluded_methods(cls):
         # internal interfaces, no need to expose to users.
-        return {'withClassLoader'}
+        return {'withClassLoader', 'withCatalogStore'}
 
 if __name__ == '__main__':
     import unittest

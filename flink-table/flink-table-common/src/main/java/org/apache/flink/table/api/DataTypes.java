@@ -744,7 +744,9 @@ public final class DataTypes {
         return new FieldsDataType(new RowType(logicalFields), fieldDataTypes);
     }
 
-    /** @see #ROW(Field...) */
+    /**
+     * @see #ROW(Field...)
+     */
     public static DataType ROW(List<Field> fields) {
         return ROW(fields.toArray(new Field[0]));
     }
@@ -783,7 +785,7 @@ public final class DataTypes {
      * <p>Use {@link #FIELD(String, AbstractDataType)} or {@link #FIELD(String, AbstractDataType,
      * String)} to construct fields.
      *
-     * <p>Note: Compared to {@link #ROW(Field...)} )}, this method produces an {@link
+     * <p>Note: Compared to {@link #ROW(Field...)}, this method produces an {@link
      * UnresolvedDataType} with {@link UnresolvedField}s. In most of the cases, the {@link
      * UnresolvedDataType} will be automatically resolved by the API. At other locations, a {@link
      * DataTypeFactory} is provided.

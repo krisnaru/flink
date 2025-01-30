@@ -22,6 +22,8 @@ import org.apache.flink.core.testutils.CommonTestUtils;
 import org.apache.flink.core.testutils.FlinkAssertions;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.ResultKind;
+import org.apache.flink.table.api.internal.StaticResultProvider;
+import org.apache.flink.table.api.internal.TableResultUtils;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.data.GenericRowData;
@@ -31,14 +33,15 @@ import org.apache.flink.table.gateway.api.results.FetchOrientation;
 import org.apache.flink.table.gateway.api.results.ResultSet;
 import org.apache.flink.table.gateway.service.utils.IgnoreExceptionHandler;
 import org.apache.flink.table.gateway.service.utils.SqlExecutionException;
+import org.apache.flink.testutils.executor.TestExecutorExtension;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
-import org.apache.flink.util.TestLogger;
 import org.apache.flink.util.concurrent.ExecutorThreadFactory;
 
 import org.apache.commons.collections.iterators.IteratorChain;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -52,7 +55,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -64,16 +68,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Test for {@link ResultFetcher}. */
-public class ResultFetcherTest extends TestLogger {
+class ResultFetcherTest {
 
     private static ResolvedSchema schema;
     private static List<RowData> data;
 
-    private final ThreadFactory threadFactory =
-            new ExecutorThreadFactory("Result Fetcher Test Pool", IgnoreExceptionHandler.INSTANCE);
+    @RegisterExtension
+    private static final TestExecutorExtension<ExecutorService> EXECUTOR_EXTENSION =
+            new TestExecutorExtension<>(
+                    () ->
+                            Executors.newCachedThreadPool(
+                                    new ExecutorThreadFactory(
+                                            "Result Fetcher Test Pool",
+                                            IgnoreExceptionHandler.INSTANCE)));
 
     @BeforeAll
-    public static void setUp() {
+    static void setUp() {
         schema =
                 ResolvedSchema.of(
                         Column.physical("boolean", DataTypes.BOOLEAN()),
@@ -161,7 +171,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultsMultipleTimesWithLimitedBufferSize() {
+    void testFetchResultsMultipleTimesWithLimitedBufferSize() {
         int bufferSize = data.size() / 2;
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), bufferSize);
@@ -172,7 +182,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultsMultipleTimesWithLimitedFetchSize() {
+    void testFetchResultsMultipleTimesWithLimitedFetchSize() {
         int bufferSize = data.size();
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), bufferSize);
@@ -183,7 +193,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultsInWithLimitedBufferSizeInOrientation() {
+    void testFetchResultsInWithLimitedBufferSizeInOrientation() {
         int bufferSize = data.size() / 2;
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), bufferSize);
@@ -196,7 +206,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultsMultipleTimesWithLimitedFetchSizeInOrientation() {
+    void testFetchResultsMultipleTimesWithLimitedFetchSizeInOrientation() {
         int bufferSize = data.size();
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), bufferSize);
@@ -209,7 +219,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultInParallel() throws Exception {
+    void testFetchResultInParallel() throws Exception {
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), data.size() / 2);
         CommonTestUtils.waitUtil(
@@ -220,7 +230,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultInOrientationInParallel() throws Exception {
+    void testFetchResultInOrientationInParallel() throws Exception {
         List<Iterator<RowData>> dataSuppliers =
                 data.stream()
                         .map(
@@ -244,8 +254,9 @@ public class ResultFetcherTest extends TestLogger {
 
         AtomicReference<Boolean> payloadHasData = new AtomicReference<>(true);
         for (int i = 0; i < fetchThreadNum; i++) {
-            threadFactory
-                    .newThread(
+            EXECUTOR_EXTENSION
+                    .getExecutor()
+                    .submit(
                             () -> {
                                 ResultSet resultSet =
                                         fetcher.fetchResults(FetchOrientation.FETCH_NEXT, 1);
@@ -254,10 +265,19 @@ public class ResultFetcherTest extends TestLogger {
                                     payloadHasData.set(false);
                                 }
 
-                                rows.put(Thread.currentThread().getId(), resultSet.getData());
+                                rows.compute(
+                                        Thread.currentThread().getId(),
+                                        (k, v) -> {
+                                            if (v == null) {
+                                                return resultSet.getData();
+                                            } else {
+                                                v.addAll(resultSet.getData());
+                                                return v;
+                                            }
+                                        });
+
                                 latch.countDown();
-                            })
-                    .start();
+                            });
         }
 
         latch.await();
@@ -268,13 +288,13 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultFromDummyStoreInParallel() throws Exception {
+    void testFetchResultFromDummyStoreInParallel() throws Exception {
         checkFetchResultInParallel(
                 ResultFetcher.fromResults(OperationHandle.create(), schema, data));
     }
 
     @Test
-    public void testFetchResultAfterClose() throws Exception {
+    void testFetchResultAfterClose() throws Exception {
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), data.size() + 1);
         List<RowData> actual = Collections.emptyList();
@@ -291,8 +311,9 @@ public class ResultFetcherTest extends TestLogger {
 
         long testToken = token;
         AtomicReference<Boolean> meetEnd = new AtomicReference<>(false);
-        threadFactory
-                .newThread(
+        EXECUTOR_EXTENSION
+                .getExecutor()
+                .submit(
                         () -> {
                             // Should meet EOS in the end.
                             long nextToken = testToken;
@@ -305,8 +326,7 @@ public class ResultFetcherTest extends TestLogger {
                                 nextToken = checkNotNull(resultSet.getNextToken());
                             }
                             meetEnd.set(true);
-                        })
-                .start();
+                        });
 
         CommonTestUtils.waitUtil(
                 meetEnd::get,
@@ -315,7 +335,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchResultWithToken() {
+    void testFetchResultWithToken() {
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), data.size());
         Long nextToken = 0L;
@@ -347,7 +367,7 @@ public class ResultFetcherTest extends TestLogger {
     // --------------------------------------------------------------------------------------------
 
     @Test
-    public void testFetchFailedResult() {
+    void testFetchFailedResult() {
         String message = "Artificial Exception";
         ResultFetcher fetcher =
                 buildResultFetcher(
@@ -368,7 +388,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchIllegalToken() {
+    void testFetchIllegalToken() {
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), data.size());
         assertThatThrownBy(() -> fetcher.fetchResults(2, Integer.MAX_VALUE))
@@ -376,7 +396,7 @@ public class ResultFetcherTest extends TestLogger {
     }
 
     @Test
-    public void testFetchBeforeWithDifferentSize() throws Exception {
+    void testFetchBeforeWithDifferentSize() throws Exception {
         ResultFetcher fetcher =
                 buildResultFetcher(Collections.singletonList(data.iterator()), data.size() / 2);
         CommonTestUtils.waitUtil(
@@ -404,11 +424,13 @@ public class ResultFetcherTest extends TestLogger {
                 operationHandle,
                 schema,
                 CloseableIterator.adapterForIterator(new IteratorChain(rows)),
-                null,
+                StaticResultProvider.SIMPLE_ROW_DATA_TO_STRING_CONVERTER,
                 false,
                 null,
                 ResultKind.SUCCESS_WITH_CONTENT,
-                bufferSize);
+                bufferSize,
+                TableResultUtils.buildPrintStyle(
+                        schema, StaticResultProvider.SIMPLE_ROW_DATA_TO_STRING_CONVERTER));
     }
 
     private void runFetchMultipleTimes(
@@ -437,8 +459,9 @@ public class ResultFetcherTest extends TestLogger {
 
         List<RowData> firstFetch = fetcher.fetchResults(0, Integer.MAX_VALUE).getData();
         for (int i = 0; i < fetchThreadNum; i++) {
-            threadFactory
-                    .newThread(
+            EXECUTOR_EXTENSION
+                    .getExecutor()
+                    .submit(
                             () -> {
                                 ResultSet resultSet = fetcher.fetchResults(0, Integer.MAX_VALUE);
 
@@ -446,8 +469,7 @@ public class ResultFetcherTest extends TestLogger {
                                     isEqual.set(false);
                                 }
                                 latch.countDown();
-                            })
-                    .start();
+                            });
         }
 
         latch.await();

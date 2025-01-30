@@ -262,7 +262,6 @@ Your applications are certainly capable of using state without getting Flink inv
 * **durable**: Flink state is fault-tolerant, i.e., it is automatically checkpointed at regular intervals, and is restored upon failure
 * **vertically scalable**: Flink state can be kept in embedded RocksDB instances that scale by adding more local disk
 * **horizontally scalable**: Flink state is redistributed as your cluster grows and shrinks
-* **queryable**: Flink state can be queried externally via the [Queryable State API]({{< ref "docs/dev/datastream/fault-tolerance/queryable_state" >}}).
 
 In this section you will learn how to work with Flink's APIs that manage keyed state.
 
@@ -275,7 +274,7 @@ Abstract Method pattern.
 For each of these interfaces, Flink also provides a so-called "rich" variant, e.g.,
 `RichFlatMapFunction`, which has some additional methods, including:
 
-- `open(Configuration c)`
+- `open(OpenContext context)`
 - `close()`
 - `getRuntimeContext()`
 
@@ -330,7 +329,7 @@ public static class Deduplicator extends RichFlatMapFunction<Event, Event> {
     ValueState<Boolean> keyHasBeenSeen;
 
     @Override
-    public void open(Configuration conf) {
+    public void open(OpenContext ctx) {
         ValueStateDescriptor<Boolean> desc = new ValueStateDescriptor<>("keyHasBeenSeen", Types.BOOLEAN);
         keyHasBeenSeen = getRuntimeContext().getState(desc);
     }
@@ -448,7 +447,7 @@ public static class ControlFunction extends RichCoFlatMapFunction<String, String
     private ValueState<Boolean> blocked;
       
     @Override
-    public void open(Configuration config) {
+    public void open(OpenContext ctx) {
         blocked = getRuntimeContext()
             .getState(new ValueStateDescriptor<>("blocked", Boolean.class));
     }

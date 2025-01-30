@@ -20,36 +20,33 @@ package org.apache.flink.api.java.typeutils.runtime;
 
 import org.apache.flink.FlinkVersion;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.TypeSerializerMatchers;
+import org.apache.flink.api.common.typeutils.TypeSerializerConditions;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerUpgradeTestBase;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.api.java.tuple.Tuple3;
 
-import org.hamcrest.Matcher;
+import org.assertj.core.api.Condition;
 
 import java.util.ArrayList;
 import java.util.Collection;
-
-import static org.hamcrest.Matchers.is;
 
 /** {@link TupleSerializer} upgrade test. */
 class TupleSerializerUpgradeTest
         extends TypeSerializerUpgradeTestBase<
                 Tuple3<String, String, Integer>, Tuple3<String, String, Integer>> {
 
-    public Collection<TestSpecification<?, ?>> createTestSpecifications() throws Exception {
+    public Collection<TestSpecification<?, ?>> createTestSpecifications(FlinkVersion flinkVersion)
+            throws Exception {
 
         ArrayList<TestSpecification<?, ?>> testSpecifications = new ArrayList<>();
-        for (FlinkVersion flinkVersion : MIGRATION_VERSIONS) {
-            testSpecifications.add(
-                    new TestSpecification<>(
-                            "tuple-serializer",
-                            flinkVersion,
-                            TupleSerializerSetup.class,
-                            TupleSerializerVerifier.class));
-        }
+        testSpecifications.add(
+                new TestSpecification<>(
+                        "tuple-serializer",
+                        flinkVersion,
+                        TupleSerializerSetup.class,
+                        TupleSerializerVerifier.class));
 
         return testSpecifications;
     }
@@ -93,14 +90,15 @@ class TupleSerializerUpgradeTest
         }
 
         @Override
-        public Matcher<Tuple3<String, String, Integer>> testDataMatcher() {
-            return is(new Tuple3<>("hello Gordon", "ciao", 14));
+        public Condition<Tuple3<String, String, Integer>> testDataCondition() {
+            Tuple3<String, String, Integer> value = new Tuple3<>("hello Gordon", "ciao", 14);
+            return new Condition<>(value::equals, "value is (hello Gordon, ciao, 14)");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<Tuple3<String, String, Integer>>>
-                schemaCompatibilityMatcher(FlinkVersion version) {
-            return TypeSerializerMatchers.isCompatibleAsIs();
+        public Condition<TypeSerializerSchemaCompatibility<Tuple3<String, String, Integer>>>
+                schemaCompatibilityCondition(FlinkVersion version) {
+            return TypeSerializerConditions.isCompatibleAsIs();
         }
     }
 }

@@ -21,61 +21,45 @@ package org.apache.flink.api.common.typeutils.base;
 import org.apache.flink.FlinkVersion;
 import org.apache.flink.api.common.typeutils.ClassRelocator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.TypeSerializerMatchers;
+import org.apache.flink.api.common.typeutils.TypeSerializerConditions;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerUpgradeTestBase;
 
-import org.hamcrest.Description;
-import org.hamcrest.Matcher;
-import org.hamcrest.TypeSafeMatcher;
+import org.assertj.core.api.Condition;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 
 import static org.apache.flink.api.common.typeutils.base.TestEnum.EMMA;
-import static org.hamcrest.Matchers.is;
 
 /** Migration tests for {@link EnumSerializer}. */
 class EnumSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<TestEnum, TestEnum> {
     private static final String SPEC_NAME = "enum-serializer";
 
-    public Collection<TestSpecification<?, ?>> createTestSpecifications() throws Exception {
+    public Collection<TestSpecification<?, ?>> createTestSpecifications(FlinkVersion flinkVersion)
+            throws Exception {
 
         ArrayList<TestSpecification<?, ?>> testSpecifications = new ArrayList<>();
-        for (FlinkVersion flinkVersion : MIGRATION_VERSIONS) {
-            testSpecifications.add(
-                    new TestSpecification<>(
-                            SPEC_NAME,
-                            flinkVersion,
-                            EnumSerializerSetup.class,
-                            EnumSerializerVerifier.class));
-            testSpecifications.add(
-                    new TestSpecification<>(
-                            SPEC_NAME + "reconfig",
-                            flinkVersion,
-                            EnumSerializerReconfigSetup.class,
-                            EnumSerializerReconfigVerifier.class));
-        }
+        testSpecifications.add(
+                new TestSpecification<>(
+                        SPEC_NAME,
+                        flinkVersion,
+                        EnumSerializerSetup.class,
+                        EnumSerializerVerifier.class));
+        testSpecifications.add(
+                new TestSpecification<>(
+                        SPEC_NAME + "reconfig",
+                        flinkVersion,
+                        EnumSerializerReconfigSetup.class,
+                        EnumSerializerReconfigVerifier.class));
         return testSpecifications;
     }
 
-    private static Matcher<? extends TypeSerializer<TestEnum>> enumSerializerWith(
+    private static Condition<? extends TypeSerializer<TestEnum>> enumSerializerWith(
             final TestEnum[] expectedEnumValues) {
-        return new TypeSafeMatcher<EnumSerializer<TestEnum>>() {
-
-            @Override
-            protected boolean matchesSafely(EnumSerializer<TestEnum> reconfiguredSerialized) {
-                return Arrays.equals(reconfiguredSerialized.getValues(), expectedEnumValues);
-            }
-
-            @Override
-            public void describeTo(Description description) {
-                description
-                        .appendText("EnumSerializer with values ")
-                        .appendValueList("{", ", ", "}", expectedEnumValues);
-            }
-        };
+        return new Condition<EnumSerializer<TestEnum>>(
+                value -> Arrays.equals(value.getValues(), expectedEnumValues), "");
     }
 
     // ----------------------------------------------------------------------------------------------
@@ -91,7 +75,7 @@ class EnumSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<TestEnum, 
         @SuppressWarnings("unchecked")
         @Override
         public TypeSerializer<TestEnum> createPriorSerializer() {
-            return new EnumSerializer(TestEnum.class);
+            return new EnumSerializer<>(TestEnum.class);
         }
 
         @Override
@@ -109,18 +93,18 @@ class EnumSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<TestEnum, 
         @SuppressWarnings("unchecked")
         @Override
         public TypeSerializer<TestEnum> createUpgradedSerializer() {
-            return new EnumSerializer(TestEnum.class);
+            return new EnumSerializer<>(TestEnum.class);
         }
 
         @Override
-        public Matcher<TestEnum> testDataMatcher() {
-            return is(EMMA);
+        public Condition<TestEnum> testDataCondition() {
+            return new Condition<>(value -> value == EMMA, "is EMMA");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<TestEnum>> schemaCompatibilityMatcher(
+        public Condition<TypeSerializerSchemaCompatibility<TestEnum>> schemaCompatibilityCondition(
                 FlinkVersion version) {
-            return TypeSerializerMatchers.isCompatibleAsIs();
+            return TypeSerializerConditions.isCompatibleAsIs();
         }
     }
 
@@ -144,7 +128,7 @@ class EnumSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<TestEnum, 
         @SuppressWarnings("unchecked")
         @Override
         public TypeSerializer<EnumBefore> createPriorSerializer() {
-            return new EnumSerializer(EnumBefore.class);
+            return new EnumSerializer<>(EnumBefore.class);
         }
 
         @Override
@@ -173,18 +157,18 @@ class EnumSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<TestEnum, 
         @SuppressWarnings("unchecked")
         @Override
         public TypeSerializer<EnumAfter> createUpgradedSerializer() {
-            return new EnumSerializer(EnumAfter.class);
+            return new EnumSerializer<>(EnumAfter.class);
         }
 
         @Override
-        public Matcher<EnumAfter> testDataMatcher() {
-            return is(EnumAfter.EMMA);
+        public Condition<EnumAfter> testDataCondition() {
+            return new Condition<>(value -> value == EnumAfter.EMMA, "is EMMA");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<EnumAfter>> schemaCompatibilityMatcher(
+        public Condition<TypeSerializerSchemaCompatibility<EnumAfter>> schemaCompatibilityCondition(
                 FlinkVersion version) {
-            return TypeSerializerMatchers.isCompatibleWithReconfiguredSerializer();
+            return TypeSerializerConditions.isCompatibleWithReconfiguredSerializer();
         }
     }
 }

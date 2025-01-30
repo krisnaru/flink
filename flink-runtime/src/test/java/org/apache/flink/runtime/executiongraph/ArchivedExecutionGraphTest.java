@@ -22,7 +22,6 @@ import org.apache.flink.api.common.ArchivedExecutionConfig;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.core.testutils.CommonTestUtils;
 import org.apache.flink.runtime.checkpoint.CheckpointRetentionPolicy;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
@@ -32,14 +31,18 @@ import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutorServiceAda
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobGraphBuilder;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
 import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
+import org.apache.flink.runtime.scheduler.DefaultVertexParallelismInfo;
+import org.apache.flink.runtime.scheduler.DefaultVertexParallelismStore;
 import org.apache.flink.runtime.scheduler.SchedulerBase;
 import org.apache.flink.runtime.scheduler.SchedulerTestingUtils;
 import org.apache.flink.runtime.taskmanager.TaskExecutionState;
+import org.apache.flink.streaming.util.RestartStrategyUtils;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
 
@@ -48,10 +51,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Function;
 
@@ -87,7 +92,6 @@ public class ArchivedExecutionGraphTest {
 
         ExecutionConfig config = new ExecutionConfig();
 
-        config.setRestartStrategy(new RestartStrategies.NoRestartStrategyConfiguration());
         config.setParallelism(4);
         config.enableObjectReuse();
         config.setGlobalJobParameters(new TestJobParameters());
@@ -112,6 +116,8 @@ public class ArchivedExecutionGraphTest {
                         .setJobCheckpointingSettings(checkpointingSettings)
                         .setExecutionConfig(config)
                         .build();
+
+        RestartStrategyUtils.configureNoRestartStrategy(jobGraph);
 
         SchedulerBase scheduler =
                 SchedulerTestingUtils.createScheduler(
@@ -155,6 +161,7 @@ public class ArchivedExecutionGraphTest {
                         new JobID(),
                         "TestJob",
                         JobStatus.SUSPENDED,
+                        JobType.STREAMING,
                         new Exception("Test suspension exception"),
                         null,
                         System.currentTimeMillis());
@@ -173,6 +180,7 @@ public class ArchivedExecutionGraphTest {
                         new JobID(),
                         "TestJob",
                         JobStatus.INITIALIZING,
+                        JobType.STREAMING,
                         null,
                         new JobCheckpointingSettings(checkpointCoordinatorConfiguration, null),
                         System.currentTimeMillis());
@@ -185,6 +193,50 @@ public class ArchivedExecutionGraphTest {
         assertThat(archivedGraph.getCheckpointStatsSnapshot()).isNotNull();
         assertThat(archivedGraph.getCheckpointStorageName().get()).isEqualTo("Unknown");
         assertThat(archivedGraph.getStateBackendName().get()).isEqualTo("Unknown");
+    }
+
+    @Test
+    void testArchiveSparseWithVertices() {
+        final JobVertex jobVertex = new JobVertex("op");
+        jobVertex.setParallelism(1);
+
+        final int storedParallelism = 4;
+        final int storedMaxParallelism = 8;
+        final DefaultVertexParallelismStore initialParallelismStore =
+                new DefaultVertexParallelismStore();
+        initialParallelismStore.setParallelismInfo(
+                jobVertex.getID(),
+                new DefaultVertexParallelismInfo(
+                        storedParallelism, storedMaxParallelism, ignored -> Optional.empty()));
+
+        final ArchivedExecutionGraph archivedGraph =
+                ArchivedExecutionGraph.createSparseArchivedExecutionGraphWithJobVertices(
+                        new JobID(),
+                        "TestJob",
+                        JobStatus.INITIALIZING,
+                        JobType.STREAMING,
+                        null,
+                        null,
+                        System.currentTimeMillis(),
+                        Arrays.asList(jobVertex),
+                        initialParallelismStore);
+
+        // make sure both vertex retrieval APIs work and are equivalent
+        final ArchivedExecutionJobVertex archivedVertex =
+                archivedGraph.getJobVertex(jobVertex.getID());
+        assertThat(archivedVertex).isNotNull();
+        assertThat(archivedGraph.getVerticesTopologically()).containsExactly(archivedVertex);
+
+        // parallelism store is queried for (max)parallelism
+        assertThat(archivedVertex.getParallelism()).isEqualTo(storedParallelism);
+        assertThat(archivedVertex.getMaxParallelism()).isEqualTo(storedMaxParallelism);
+
+        assertThat(archivedVertex.getName()).isEqualTo(jobVertex.getName());
+
+        // everything related to subtasks returns sane defaults
+        assertThat(archivedVertex.getAggregatedUserAccumulatorsStringified()).hasSize(0);
+        assertThat(archivedVertex.getTaskVertices()).hasSize(0);
+        assertThat(archivedVertex.getAggregateState()).isSameAs(ExecutionState.CREATED);
     }
 
     @Test
@@ -275,7 +327,6 @@ public class ArchivedExecutionGraphTest {
         ArchivedExecutionConfig runtimeConfig = runtimeGraph.getArchivedExecutionConfig();
         ArchivedExecutionConfig archivedConfig = archivedGraph.getArchivedExecutionConfig();
 
-        assertThat(runtimeConfig.getExecutionMode()).isEqualTo(archivedConfig.getExecutionMode());
         assertThat(runtimeConfig.getParallelism()).isEqualTo(archivedConfig.getParallelism());
         assertThat(runtimeConfig.getObjectReuseEnabled())
                 .isEqualTo(archivedConfig.getObjectReuseEnabled());

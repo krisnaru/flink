@@ -29,6 +29,7 @@ import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.configuration.WebOptions;
+import org.apache.flink.runtime.rest.HttpHeader;
 import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.table.api.DataTypes;
@@ -165,7 +166,7 @@ class ExecutorImplITCase {
     private static RestClusterClient<?> clusterClient;
 
     // a generated UDF jar used for testing classloading of dependencies
-    private static URL udfDependency;
+    private static URI udfDependency;
 
     private final ThreadFactory threadFactory =
             new ExecutorThreadFactory("Executor Test Pool", IgnoreExceptionHandler.INSTANCE);
@@ -180,15 +181,15 @@ class ExecutorImplITCase {
                         "test-classloader-udf.jar",
                         GENERATED_LOWER_UDF_CLASS,
                         String.format(GENERATED_LOWER_UDF_CODE, GENERATED_LOWER_UDF_CLASS));
-        udfDependency = udfJar.toURI().toURL();
+        udfDependency = udfJar.toURI();
     }
 
     private static Configuration getConfig() {
         Configuration config = new Configuration();
         config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.parse("4m"));
-        config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, NUM_TMS);
-        config.setInteger(TaskManagerOptions.NUM_TASK_SLOTS, NUM_SLOTS_PER_TM);
-        config.setBoolean(WebOptions.SUBMIT_ENABLE, false);
+        config.set(TaskManagerOptions.MINI_CLUSTER_NUM_TASK_MANAGERS, NUM_TMS);
+        config.set(TaskManagerOptions.NUM_TASK_SLOTS, NUM_SLOTS_PER_TM);
+        config.set(WebOptions.SUBMIT_ENABLE, false);
         config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
         config.set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
         config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, tempFolder.toURI().toString());
@@ -518,7 +519,7 @@ class ExecutorImplITCase {
         testInterrupting(
                 executor -> {
                     try (StatementResult result =
-                            executor.executeStatement(BlockPhase.EXECUTION.name())) {
+                            executor.executeStatement(BlockPhase.FETCHING.name())) {
                         // trigger to fetch again
                         result.hasNext();
                     }
@@ -576,6 +577,24 @@ class ExecutorImplITCase {
                 .isFalse();
     }
 
+    @Test
+    void testCustomHeadersSupport() {
+        final Map<String, String> envMap =
+                Collections.singletonMap(
+                        ConfigConstants.FLINK_REST_CLIENT_HEADERS,
+                        "Cookie:authCookie=12:345\nCustomHeader:value1,value2\nMalformedHeaderSkipped");
+        org.apache.flink.core.testutils.CommonTestUtils.setEnv(envMap);
+        try (final ExecutorImpl executor = (ExecutorImpl) createTestServiceExecutor()) {
+            final List<HttpHeader> customHttpHeaders =
+                    new ArrayList<>(executor.getCustomHttpHeaders());
+            final HttpHeader expectedHeader1 = new HttpHeader("Cookie", "authCookie=12:345");
+            final HttpHeader expectedHeader2 = new HttpHeader("CustomHeader", "value1,value2");
+            assertThat(customHttpHeaders).hasSize(2);
+            assertThat(customHttpHeaders.get(0)).isEqualTo(expectedHeader1);
+            assertThat(customHttpHeaders.get(1)).isEqualTo(expectedHeader2);
+        }
+    }
+
     // --------------------------------------------------------------------------------------------
     // Helper method
     // --------------------------------------------------------------------------------------------
@@ -610,18 +629,25 @@ class ExecutorImplITCase {
 
     private void testInterrupting(Consumer<Executor> task) throws Exception {
         try (Executor executor = createTestServiceExecutor()) {
-            Thread t = threadFactory.newThread(() -> task.accept(executor));
-            t.start();
-
             TestSqlGatewayService service =
                     (TestSqlGatewayService)
                             TEST_SQL_GATEWAY_REST_ENDPOINT_EXTENSION.getSqlGatewayService();
+            Thread t =
+                    threadFactory.newThread(
+                            () -> {
+                                try {
+                                    task.accept(executor);
+                                } finally {
+                                    // notify server to return results until the executor finishes
+                                    // exception processing.
+                                    service.latch.countDown();
+                                }
+                            });
+            t.start();
             CommonTestUtils.waitUntilCondition(() -> service.isBlocking, 100L);
 
             // interrupt the submission
             t.interrupt();
-            // notify service return handle
-            service.latch.countDown();
 
             CommonTestUtils.waitUntilCondition(() -> service.isClosed, 100L);
         }
@@ -636,7 +662,7 @@ class ExecutorImplITCase {
     }
 
     private Executor createRestServiceExecutor(
-            List<URL> dependencies, Configuration configuration) {
+            List<URI> dependencies, Configuration configuration) {
         return createExecutor(
                 dependencies,
                 configuration,
@@ -655,7 +681,7 @@ class ExecutorImplITCase {
     }
 
     private Executor createExecutor(
-            List<URL> dependencies, Configuration configuration, InetSocketAddress address) {
+            List<URI> dependencies, Configuration configuration, InetSocketAddress address) {
         configuration.addAll(clusterClient.getFlinkConfiguration());
         DefaultContext defaultContext = new DefaultContext(configuration, dependencies);
         // frequently trigger heartbeat

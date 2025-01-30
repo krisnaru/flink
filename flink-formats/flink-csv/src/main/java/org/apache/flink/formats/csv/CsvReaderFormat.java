@@ -36,8 +36,6 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.dataformat.csv.Csv
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.function.Function;
-import java.util.function.Supplier;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -113,31 +111,12 @@ public class CsvReaderFormat<T> extends SimpleStreamFormat<T> {
     }
 
     /**
-     * @deprecated This method is limited to serializable {@link CsvMapper CsvMappers}, preventing
-     *     the usage of certain Jackson modules (like the {@link
-     *     org.apache.flink.shaded.jackson2.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-     *     Java 8 Date/Time Serializers}). Use {@link #forSchema(Supplier, Function,
-     *     TypeInformation)} instead.
-     */
-    @Deprecated
-    public static <T> CsvReaderFormat<T> forSchema(
-            CsvMapper mapper, CsvSchema schema, TypeInformation<T> typeInformation) {
-        return new CsvReaderFormat<>(
-                () -> mapper,
-                ignored -> schema,
-                typeInformation.getTypeClass(),
-                (value, context) -> value,
-                typeInformation,
-                false);
-    }
-
-    /**
      * Builds a new {@code CsvReaderFormat} using a {@code CsvSchema} generator and {@code
      * CsvMapper} factory.
      *
      * @param mapperFactory The factory creating the {@code CsvMapper}.
      * @param schemaGenerator A generator that creates and configures the Jackson CSV schema for
-     *     parsins specific CSV files, from a mapper created by the mapper factory.
+     *     parsing specific CSV files, from a mapper created by the mapper factory.
      * @param typeInformation The Flink type descriptor of the returned elements.
      * @param <T> The type of the returned elements.
      */
@@ -164,17 +143,17 @@ public class CsvReaderFormat<T> extends SimpleStreamFormat<T> {
      */
     public static <T> CsvReaderFormat<T> forPojo(Class<T> pojoType) {
         return forSchema(
-                () -> JacksonMapperFactory.createCsvMapper(),
+                JacksonMapperFactory::createCsvMapper,
                 mapper -> mapper.schemaFor(pojoType).withoutQuoteChar(),
                 TypeInformation.of(pojoType));
     }
 
     /**
-     * Returns a new {@code CsvReaderFormat} configured to ignore all parsing errors. All thye other
+     * Returns a new {@code CsvReaderFormat} configured to ignore all parsing errors. All the other
      * options directly carried over from the subject of the method call.
      */
     public CsvReaderFormat<T> withIgnoreParseErrors() {
-        return new CsvReaderFormat<T>(
+        return new CsvReaderFormat<>(
                 this.mapperFactory,
                 this.schemaGenerator,
                 this.rootType,

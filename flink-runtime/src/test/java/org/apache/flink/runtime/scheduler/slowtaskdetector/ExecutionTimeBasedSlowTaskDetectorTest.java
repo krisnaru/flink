@@ -31,17 +31,21 @@ import org.apache.flink.runtime.jobgraph.DistributionPattern;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobGraphTestUtils;
 import org.apache.flink.runtime.jobgraph.JobVertex;
+import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.scheduler.DefaultSchedulerBuilder;
 import org.apache.flink.runtime.scheduler.SchedulerBase;
 import org.apache.flink.runtime.scheduler.SchedulerTestingUtils;
 import org.apache.flink.runtime.scheduler.slowtaskdetector.ExecutionTimeBasedSlowTaskDetector.ExecutionTimeWithInputBytes;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
 import org.apache.flink.runtime.testtasks.NoOpInvokable;
+import org.apache.flink.runtime.util.TestingFatalErrorHandler;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+
+import javax.annotation.Nonnull;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -52,6 +56,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.createNoOpVertex;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -74,6 +79,27 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
                 slowTaskDetector.findSlowTasks(executionGraph);
 
         assertThat(slowTasks).hasSize(parallelism);
+    }
+
+    @Test
+    void testAllTasksInCreatedAndNoSlowTasks() throws Exception {
+        final int parallelism = 3;
+        final JobVertex jobVertex = createNoOpVertex(parallelism);
+        final JobGraph jobGraph = JobGraphTestUtils.streamingJobGraph(jobVertex);
+
+        // all tasks are in the CREATED state, which is not classified as slow tasks.
+        final ExecutionGraph executionGraph =
+                SchedulerTestingUtils.createScheduler(
+                                jobGraph,
+                                ComponentMainThreadExecutorServiceAdapter.forMainThread(),
+                                EXECUTOR_RESOURCE.getExecutor())
+                        .getExecutionGraph();
+
+        final ExecutionTimeBasedSlowTaskDetector slowTaskDetector = createSlowTaskDetector(0, 1, 0);
+        final Map<ExecutionVertexID, Collection<ExecutionAttemptID>> slowTasks =
+                slowTaskDetector.findSlowTasks(executionGraph);
+
+        assertThat(slowTasks).isEmpty();
     }
 
     @Test
@@ -161,8 +187,11 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         final int parallelism = 3;
         final JobVertex jobVertex1 = createNoOpVertex(parallelism);
         final JobVertex jobVertex2 = createNoOpVertex(parallelism);
-        jobVertex2.connectNewDataSetAsInput(
-                jobVertex1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                jobVertex2,
+                jobVertex1,
+                DistributionPattern.ALL_TO_ALL,
+                ResultPartitionType.PIPELINED);
         final ExecutionGraph executionGraph = createExecutionGraph(jobVertex1, jobVertex2);
 
         final ExecutionTimeBasedSlowTaskDetector slowTaskDetector =
@@ -188,8 +217,11 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         // create jobVertex2 and leave its parallelism unset
         final JobVertex jobVertex2 = new JobVertex("vertex2");
         jobVertex2.setInvokableClass(NoOpInvokable.class);
-        jobVertex2.connectNewDataSetAsInput(
-                jobVertex1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                jobVertex2,
+                jobVertex1,
+                DistributionPattern.ALL_TO_ALL,
+                ResultPartitionType.BLOCKING);
         final ExecutionGraph executionGraph = createDynamicExecutionGraph(jobVertex1, jobVertex2);
 
         final ExecutionTimeBasedSlowTaskDetector slowTaskDetector =
@@ -210,8 +242,11 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         final int parallelism = 3;
         final JobVertex jobVertex1 = createNoOpVertex(parallelism);
         final JobVertex jobVertex2 = createNoOpVertex(parallelism);
-        jobVertex2.connectNewDataSetAsInput(
-                jobVertex1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                jobVertex2,
+                jobVertex1,
+                DistributionPattern.ALL_TO_ALL,
+                ResultPartitionType.PIPELINED);
         final ExecutionGraph executionGraph = createExecutionGraph(jobVertex1, jobVertex2);
         final ExecutionTimeBasedSlowTaskDetector slowTaskDetector =
                 createSlowTaskDetector(0.3, 1, 0);
@@ -239,8 +274,11 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         final int parallelism = 3;
         final JobVertex jobVertex1 = createNoOpVertex(parallelism);
         final JobVertex jobVertex2 = createNoOpVertex(parallelism);
-        jobVertex2.connectNewDataSetAsInput(
-                jobVertex1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                jobVertex2,
+                jobVertex1,
+                DistributionPattern.ALL_TO_ALL,
+                ResultPartitionType.PIPELINED);
         final ExecutionGraph executionGraph = createExecutionGraph(jobVertex1, jobVertex2);
         final ExecutionTimeBasedSlowTaskDetector slowTaskDetector =
                 createSlowTaskDetector(0.3, 1, Integer.MAX_VALUE);
@@ -268,8 +306,11 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         final int parallelism = 3;
         final JobVertex jobVertex1 = createNoOpVertex(parallelism);
         final JobVertex jobVertex2 = createNoOpVertex(parallelism);
-        jobVertex2.connectNewDataSetAsInput(
-                jobVertex1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                jobVertex2,
+                jobVertex1,
+                DistributionPattern.ALL_TO_ALL,
+                ResultPartitionType.PIPELINED);
         final ExecutionGraph executionGraph = createExecutionGraph(jobVertex1, jobVertex2);
         final ExecutionTimeBasedSlowTaskDetector slowTaskDetector =
                 createSlowTaskDetector(0.3, 1, 0);
@@ -291,7 +332,7 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
                 slowTaskDetector.findSlowTasks(executionGraph);
 
         // no task will be detected as slow task
-        assertThat(slowTasks).hasSize(0);
+        assertThat(slowTasks).isEmpty();
     }
 
     @Test
@@ -343,15 +384,13 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         ExecutionTimeWithInputBytes executionTimeWithInputBytes7 =
                 new ExecutionTimeWithInputBytes(1, 0);
 
-        assertThat(executionTimeWithInputBytes7.compareTo(executionTimeWithInputBytes1))
-                .isEqualTo(1);
+        assertThat(executionTimeWithInputBytes7).isGreaterThan(executionTimeWithInputBytes1);
 
         // executions with 0 input bytes and 0 execution time
         ExecutionTimeWithInputBytes executionTimeWithInputBytes8 =
                 new ExecutionTimeWithInputBytes(0, 0);
 
-        assertThat(executionTimeWithInputBytes8.compareTo(executionTimeWithInputBytes1))
-                .isEqualTo(-1);
+        assertThat(executionTimeWithInputBytes8).isLessThan(executionTimeWithInputBytes1);
 
         // executions with assigned input bytes mixed with UNKNOWN input bytes
         ExecutionTimeWithInputBytes executionTimeWithInputBytes9 =
@@ -362,6 +401,30 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
         assertThatThrownBy(
                         () -> executionTimeWithInputBytes9.compareTo(executionTimeWithInputBytes10))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void testHandleNotifySlowTasksException() throws Exception {
+        final int parallelism = 3;
+        final JobVertex jobVertex = createNoOpVertex(parallelism);
+        final ExecutionGraph executionGraph = createExecutionGraph(jobVertex);
+        TestingFatalErrorHandler fatalErrorHandler = new TestingFatalErrorHandler();
+
+        final ExecutionTimeBasedSlowTaskDetector slowTaskDetector =
+                createSlowTaskDetector(0, 1, 0, fatalErrorHandler);
+
+        RuntimeException exception = new RuntimeException("test");
+        slowTaskDetector.start(
+                executionGraph,
+                // create a listener will throw exception when notify slow tasks
+                slowTasks -> {
+                    throw exception;
+                },
+                new ComponentMainThreadExecutorServiceAdapter(
+                        EXECUTOR_RESOURCE.getExecutor(), Thread.currentThread()));
+
+        slowTaskDetector.getScheduledDetectionFuture().get();
+        assertThat(fatalErrorHandler.getException()).isEqualTo(exception);
     }
 
     private ExecutionGraph createExecutionGraph(JobVertex... jobVertices) throws Exception {
@@ -382,7 +445,7 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
     }
 
     private ExecutionGraph createDynamicExecutionGraph(JobVertex... jobVertices) throws Exception {
-        final JobGraph jobGraph = JobGraphTestUtils.streamingJobGraph(jobVertices);
+        final JobGraph jobGraph = JobGraphTestUtils.batchJobGraph(jobVertices);
 
         final SchedulerBase scheduler =
                 new DefaultSchedulerBuilder(
@@ -402,13 +465,33 @@ class ExecutionTimeBasedSlowTaskDetectorTest {
     private ExecutionTimeBasedSlowTaskDetector createSlowTaskDetector(
             double ratio, double multiplier, long lowerBoundMillis) {
 
+        final Configuration configuration =
+                createSlowTaskDetectorConfiguration(ratio, multiplier, lowerBoundMillis);
+
+        return new ExecutionTimeBasedSlowTaskDetector(configuration);
+    }
+
+    private ExecutionTimeBasedSlowTaskDetector createSlowTaskDetector(
+            double ratio,
+            double multiplier,
+            long lowerBoundMillis,
+            FatalErrorHandler fatalErrorHandler) {
+
+        final Configuration configuration =
+                createSlowTaskDetectorConfiguration(ratio, multiplier, lowerBoundMillis);
+
+        return new ExecutionTimeBasedSlowTaskDetector(configuration, fatalErrorHandler);
+    }
+
+    @Nonnull
+    private static Configuration createSlowTaskDetectorConfiguration(
+            double ratio, double multiplier, long lowerBoundMillis) {
         final Configuration configuration = new Configuration();
         configuration.set(
                 SlowTaskDetectorOptions.EXECUTION_TIME_BASELINE_LOWER_BOUND,
                 Duration.ofMillis(lowerBoundMillis));
         configuration.set(SlowTaskDetectorOptions.EXECUTION_TIME_BASELINE_RATIO, ratio);
         configuration.set(SlowTaskDetectorOptions.EXECUTION_TIME_BASELINE_MULTIPLIER, multiplier);
-
-        return new ExecutionTimeBasedSlowTaskDetector(configuration);
+        return configuration;
     }
 }

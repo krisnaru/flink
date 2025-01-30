@@ -15,17 +15,17 @@
 #  See the License for the specific language governing permissions and
 # limitations under the License.
 ################################################################################
-from typing import Dict, List, Optional
-
 from py4j.java_gateway import java_import
 
+from pyflink.common.configuration import Configuration
 from pyflink.java_gateway import get_gateway
 from pyflink.table.schema import Schema
 from pyflink.table.table_schema import TableSchema
+from typing import Dict, List, Optional
 
 __all__ = ['Catalog', 'CatalogDatabase', 'CatalogBaseTable', 'CatalogPartition', 'CatalogFunction',
-           'ObjectPath', 'CatalogPartitionSpec', 'CatalogTableStatistics',
-           'CatalogColumnStatistics', 'HiveCatalog']
+           'Procedure', 'ObjectPath', 'CatalogPartitionSpec', 'CatalogTableStatistics',
+           'CatalogColumnStatistics', 'HiveCatalog', 'CatalogDescriptor']
 
 
 class Catalog(object):
@@ -356,6 +356,18 @@ class Catalog(object):
         """
         return list(self._j_catalog.listFunctions(database_name))
 
+    def list_procedures(self, database_name: str) -> List[str]:
+        """
+        List the names of all procedures in the given database. An empty list is returned if none is
+        registered.
+
+        :param database_name: Name of the database.
+        :return: A list of the names of the procedures in this database.
+        :raise: CatalogException in case of any runtime exception.
+                DatabaseNotExistException if the database does not exist.
+        """
+        return list(self._j_catalog.listProcedures(database_name))
+
     def get_function(self, function_path: 'ObjectPath') -> 'CatalogFunction':
         """
         Get the function.
@@ -366,6 +378,17 @@ class Catalog(object):
                 FunctionNotExistException if the function does not exist in the catalog.
         """
         return CatalogFunction._get(self._j_catalog.getFunction(function_path._j_object_path))
+
+    def get_procedure(self, procedure_path: 'ObjectPath') -> 'Procedure':
+        """
+        Get the procedure.
+
+        :param procedure_path: Path :class:`ObjectPath` of the procedure.
+        :return: The requested procedure :class:`Procedure`.
+        :raise: CatalogException in case of any runtime exception.
+                ProcedureNotExistException if the procedure does not exist in the catalog.
+        """
+        return Procedure._get(self._j_catalog.getProcedure(procedure_path._j_object_path))
 
     def function_exists(self, function_path: 'ObjectPath') -> bool:
         """
@@ -425,6 +448,101 @@ class Catalog(object):
                 FunctionNotExistException if the function does not exist.
         """
         self._j_catalog.dropFunction(function_path._j_object_path, ignore_if_not_exists)
+
+    def list_models(self, database_name: str) -> List[str]:
+        """
+        List the names of all models in the given database. An empty list is returned if none is
+        registered.
+
+        :param database_name: Name of the database.
+        :return: A list of the names of the models in this database.
+        :raise: CatalogException in case of any runtime exception.
+                DatabaseNotExistException if the database does not exist.
+        """
+        return list(self._j_catalog.listModels(database_name))
+
+    def get_model(self, model_path: 'ObjectPath') -> 'CatalogModel':
+        """
+        Get the model.
+
+        :param model_path: Path :class:`ObjectPath` of the model.
+        :return: The requested :class:`CatalogModel`.
+        :raise: CatalogException in case of any runtime exception.
+                ModelNotExistException if the model does not exist in the catalog.
+        """
+        return CatalogModel._get(self._j_catalog.getModel(model_path._j_object_path))
+
+    def model_exists(self, model_path: 'ObjectPath') -> bool:
+        """
+        Check whether a model exists or not.
+
+        :param model_path: Path :class:`ObjectPath` of the model.
+        :return: true if the model exists in the catalog false otherwise.
+        :raise: CatalogException in case of any runtime exception.
+        """
+        return self._j_catalog.modelExists(model_path._j_object_path)
+
+    def drop_model(self, model_path: 'ObjectPath', ignore_if_not_exists: bool):
+        """
+        Drop a model.
+
+        :param model_path: Path :class:`ObjectPath` of the model to be dropped.
+        :param ignore_if_not_exists: Flag to specify behavior if the model does not exist:
+                                     if set to false, throw an exception
+                                     if set to true, nothing happens.
+        :raise: CatalogException in case of any runtime exception.
+                ModelNotExistException if the model does not exist.
+        """
+        self._j_catalog.dropModel(model_path._j_object_path, ignore_if_not_exists)
+
+    def rename_model(self, model_path: 'ObjectPath', new_model_name: str,
+                     ignore_if_not_exists: bool):
+        """
+        Rename an existing model.
+
+        :param model_path: Path :class:`ObjectPath` of the model to be renamed.
+        :param new_model_name: The new name of the model.
+        :param ignore_if_not_exists: Flag to specify behavior when the model does not exist:
+                                     if set to false, throw an exception,
+                                     if set to true, do nothing.
+        :raise: CatalogException in case of any runtime exception.
+                ModelNotExistException if the model does not exist.
+        """
+        self._j_catalog.renameModel(model_path._j_object_path, new_model_name, ignore_if_not_exists)
+
+    def create_model(self, model_path: 'ObjectPath', model: 'CatalogModel',
+                     ignore_if_exists: bool):
+        """
+        Create a new model.
+
+        :param model_path: Path :class:`ObjectPath` of the model to be created.
+        :param model: The model definition :class:`CatalogModel`.
+        :param ignore_if_exists: Flag to specify behavior when a model already exists at
+                                 the given path:
+                                 if set to false, it throws a ModelAlreadyExistException,
+                                 if set to true, do nothing.
+        :raise: CatalogException in case of any runtime exception.
+                DatabaseNotExistException if the database in tablePath doesn't exist.
+                ModelAlreadyExistException if model already exists and ignoreIfExists is false.
+        """
+        self._j_catalog.createModel(model_path._j_object_path, model._j_catalog_model,
+                                    ignore_if_exists)
+
+    def alter_model(self, model_path: 'ObjectPath', new_model: 'CatalogModel',
+                    ignore_if_not_exists):
+        """
+        Modify an existing model.
+
+        :param model_path: Path :class:`ObjectPath` of the model to be modified.
+        :param new_model: The new model definition :class:`CatalogModel`.
+        :param ignore_if_not_exists: Flag to specify behavior when the model does not exist:
+                                     if set to false, throw an exception,
+                                     if set to true, do nothing.
+        :raise: CatalogException in case of any runtime exception.
+                ModelNotExistException if the model does not exist.
+        """
+        self._j_catalog.alterModel(model_path._j_object_path, new_model._j_catalog_model,
+                                   ignore_if_not_exists)
 
     def get_table_statistics(self, table_path: 'ObjectPath') -> 'CatalogTableStatistics':
         """
@@ -713,8 +831,12 @@ class CatalogBaseTable(object):
 
         gateway = get_gateway()
         return CatalogBaseTable(
-            gateway.jvm.org.apache.flink.table.catalog.CatalogTableImpl(
-                schema._j_table_schema, partition_keys, properties, comment))
+            gateway.jvm.org.apache.flink.table.catalog.CatalogTable.newBuilder()
+            .schema(schema._j_table_schema.toSchema())
+            .comment(comment)
+            .partitionKeys(partition_keys)
+            .options(properties)
+            .build())
 
     @staticmethod
     def create_view(
@@ -762,18 +884,6 @@ class CatalogBaseTable(object):
         .. versionadded:: 1.11.0
         """
         return dict(self._j_catalog_base_table.getOptions())
-
-    def get_schema(self) -> TableSchema:
-        """
-        Get the schema of the table.
-
-        :return: Schema of the table/view.
-
-        . note:: Deprecated in 1.14. This method returns the deprecated TableSchema class. The old
-        class was a hybrid of resolved and unresolved schema information. It has been replaced by
-        the new Schema which is always unresolved and will be resolved by the framework later.
-        """
-        return TableSchema(j_table_schema=self._j_catalog_base_table.getSchema())
 
     def get_unresolved_schema(self) -> Schema:
         """
@@ -984,16 +1094,6 @@ class CatalogFunction(object):
         else:
             return None
 
-    def is_generic(self) -> bool:
-        """
-        Whether or not is the function a flink UDF.
-
-        :return: Whether is the function a flink UDF.
-
-        .. versionadded:: 1.10.0
-        """
-        return self._j_catalog_function.isGeneric()
-
     def get_function_language(self):
         """
         Get the language used for the function definition.
@@ -1003,6 +1103,82 @@ class CatalogFunction(object):
         .. versionadded:: 1.10.0
         """
         return self._j_catalog_function.getFunctionLanguage()
+
+
+class CatalogModel(object):
+    """
+    Interface for a model in a catalog.
+    """
+
+    def __init__(self, j_catalog_model):
+        self._j_catalog_model = j_catalog_model
+
+    @staticmethod
+    def create_model(
+        input_schema: Schema,
+        output_schema: Schema,
+        options: Dict[str, str] = {},
+        comment: str = None
+    ) -> "CatalogModel":
+        """
+        Create an instance of CatalogModel for the catalog model.
+
+        :param input_schema: the model input schema
+        :param output_schema: the model output schema
+        :param options: the properties of the catalog model
+        :param comment: the comment of the catalog model
+        """
+        assert input_schema is not None
+        assert output_schema is not None
+        assert options is not None
+
+        gateway = get_gateway()
+        return CatalogModel(
+            gateway.jvm.org.apache.flink.table.catalog.CatalogModel.of(
+                input_schema._j_schema, output_schema._j_schema, options, comment))
+
+    @staticmethod
+    def _get(j_catalog_model):
+        return CatalogModel(j_catalog_model)
+
+    def copy(self) -> 'CatalogModel':
+        """
+        Create a deep copy of the model.
+
+        :return: A deep copy of "this" instance.
+        """
+        return CatalogModel(self._j_catalog_model.copy())
+
+    def get_comment(self) -> str:
+        """
+        Get comment of the model.
+
+        :return: Comment of model.
+        """
+        return self._j_catalog_model.getComment()
+
+    def get_options(self):
+        """
+        Returns a map of string-based options.
+
+        :return: Property map of the model.
+
+        .. versionadded:: 1.11.0
+        """
+        return dict(self._j_catalog_model.getOptions())
+
+
+class Procedure(object):
+    """
+    Interface for a procedure in a catalog.
+    """
+
+    def __init__(self, j_procedure):
+        self._j_procedure = j_procedure
+
+    @staticmethod
+    def _get(j_procedure):
+        return Procedure(j_procedure)
 
 
 class ObjectPath(object):
@@ -1164,13 +1340,14 @@ class HiveCatalog(Catalog):
     A catalog implementation for Hive.
     """
 
-    def __init__(self, catalog_name: str, default_database: str = None, hive_conf_dir: str = None):
+    def __init__(self, catalog_name: str, default_database: str = None, hive_conf_dir: str = None,
+                 hadoop_conf_dir: str = None, hive_version: str = None):
         assert catalog_name is not None
 
         gateway = get_gateway()
 
         j_hive_catalog = gateway.jvm.org.apache.flink.table.catalog.hive.HiveCatalog(
-            catalog_name, default_database, hive_conf_dir)
+            catalog_name, default_database, hive_conf_dir, hadoop_conf_dir, hive_version)
         super(HiveCatalog, self).__init__(j_hive_catalog)
 
 
@@ -1192,3 +1369,25 @@ class JdbcCatalog(Catalog):
         j_jdbc_catalog = gateway.jvm.org.apache.flink.connector.jdbc.catalog.JdbcCatalog(
             catalog_name, default_database, username, pwd, base_url)
         super(JdbcCatalog, self).__init__(j_jdbc_catalog)
+
+
+class CatalogDescriptor:
+    """
+    Describes a catalog with the catalog name and configuration.
+    A CatalogDescriptor is a template for creating a catalog instance. It closely resembles the
+    "CREATE CATALOG" SQL DDL statement, containing catalog name and catalog configuration.
+    """
+    def __init__(self, j_catalog_descriptor):
+        self._j_catalog_descriptor = j_catalog_descriptor
+
+    @staticmethod
+    def of(catalog_name: str, configuration: Configuration, comment: str = None):
+        assert catalog_name is not None
+        assert configuration is not None
+
+        from pyflink.java_gateway import get_gateway
+        gateway = get_gateway()
+
+        j_catalog_descriptor = gateway.jvm.org.apache.flink.table.catalog.CatalogDescriptor.of(
+            catalog_name, configuration._j_configuration, comment)
+        return CatalogDescriptor(j_catalog_descriptor)

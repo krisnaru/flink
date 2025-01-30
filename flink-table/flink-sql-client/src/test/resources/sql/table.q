@@ -31,12 +31,12 @@ org.apache.flink.table.api.ValidationException: Table with identifier 'default_c
 
 describe non_exist;
 [ERROR] Could not execute SQL statement. Reason:
-org.apache.flink.table.api.ValidationException: Tables or views with the identifier 'default_catalog.default_database.non_exist' doesn't exist
+org.apache.flink.table.api.ValidationException: Tables or views with the identifier 'default_catalog.default_database.non_exist' doesn't exist.
 !error
 
 desc non_exist;
 [ERROR] Could not execute SQL statement. Reason:
-org.apache.flink.table.api.ValidationException: Tables or views with the identifier 'default_catalog.default_database.non_exist' doesn't exist
+org.apache.flink.table.api.ValidationException: Tables or views with the identifier 'default_catalog.default_database.non_exist' doesn't exist.
 !error
 
 alter table non_exist rename to non_exist2;
@@ -45,7 +45,7 @@ org.apache.flink.table.api.ValidationException: Table `default_catalog`.`default
 !error
 
 alter table if exists non_exist rename to non_exist2;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # ==========================================================================
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS orders (
 ) with (
  'connector' = 'datagen'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # test SHOW TABLES
@@ -79,9 +79,9 @@ show tables;
 
 # test SHOW CREATE TABLE
 show create table orders;
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                              result |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                           result |
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders` (
   `user` BIGINT NOT NULL,
   `product` VARCHAR(32),
@@ -89,16 +89,86 @@ show create table orders;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'datagen'
 )
  |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
 # test SHOW COLUMNS
+show columns from orders;
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |
+|  amount |                         INT |  TRUE |           |               |                            |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+5 rows in set
+!ok
+
+# test display max colum width
+SET 'table.display.max-column-width' = '10';
+[INFO] Execute statement succeeded.
+!info
+
+show columns from orders;
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |
+|  amount |                         INT |  TRUE |           |               |                            |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+5 rows in set
+!ok
+
+SET 'table.display.max-column-width' = '100';
+[INFO] Execute statement succeeded.
+!info
+
+show columns from orders;
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |
+|  amount |                         INT |  TRUE |           |               |                            |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+5 rows in set
+!ok
+
+SET 'table.display.max-column-width' = '10';
+[INFO] Execute statement succeeded.
+!info
+
+show columns from orders;
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |
+|  amount |                         INT |  TRUE |           |               |                            |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+
+5 rows in set
+!ok
+
+SET 'table.display.max-column-width' = '100';
+[INFO] Execute statement succeeded.
+!info
+
 show columns from orders;
 +---------+-----------------------------+-------+-----------+---------------+----------------------------+
 |    name |                        type |  null |       key |        extras |                  watermark |
@@ -290,7 +360,7 @@ show columns in orders not like 'use_';
 # ==========================================================================
 
 alter table orders rename to orders2;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # ==========================================================================
@@ -299,14 +369,14 @@ alter table orders rename to orders2;
 
 # test alter table properties
 alter table orders2 set ('connector' = 'kafka', 'scan.startup.mode' = 'earliest-offset');
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options using SHOW CREATE TABLE
 show create table orders2;
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                        result |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                     result |
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders2` (
   `user` BIGINT NOT NULL,
   `product` VARCHAR(32),
@@ -314,26 +384,27 @@ show create table orders2;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'kafka',
   'scan.startup.mode' = 'earliest-offset'
 )
  |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
 # change connector to 'datagen' without removing 'scan.startup.mode' for the fix later
 alter table orders2 set ('connector' = 'datagen');
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options are problematic
 show create table orders2;
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                          result |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                       result |
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders2` (
   `user` BIGINT NOT NULL,
   `product` VARCHAR(32),
@@ -341,13 +412,14 @@ show create table orders2;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'datagen',
   'scan.startup.mode' = 'earliest-offset'
 )
  |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
@@ -372,15 +444,21 @@ connector
 fields.amount.kind
 fields.amount.max
 fields.amount.min
+fields.amount.null-rate
 fields.product.kind
 fields.product.length
+fields.product.null-rate
+fields.product.var-len
 fields.ts.kind
 fields.ts.max-past
+fields.ts.null-rate
 fields.user.kind
 fields.user.max
 fields.user.min
+fields.user.null-rate
 number-of-rows
 rows-per-second
+scan.parallelism
 !error
 
 # ==========================================================================
@@ -389,14 +467,14 @@ rows-per-second
 
 # test alter table reset to remove invalid key
 alter table orders2 reset ('scan.startup.mode');
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options using SHOW CREATE TABLE
 show create table orders2;
-+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                               result |
-+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                            result |
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders2` (
   `user` BIGINT NOT NULL,
   `product` VARCHAR(32),
@@ -404,12 +482,13 @@ show create table orders2;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'datagen'
 )
  |
-+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
@@ -424,14 +503,14 @@ org.apache.flink.table.api.ValidationException: ALTER TABLE RESET does not suppo
 # ==========================================================================
 
 alter table orders2 rename amount to amount1;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options using SHOW CREATE TABLE
 show create table orders2;
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                result |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                             result |
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders2` (
   `user` BIGINT NOT NULL,
   `product` VARCHAR(32),
@@ -439,12 +518,13 @@ show create table orders2;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'datagen'
 )
  |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
@@ -468,14 +548,14 @@ Referenced column `shipment_info` by 'AFTER' does not exist in the table.
 
 # test alter table add one column
 alter table orders2 add product_id bigint not null after `user`;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table schema using SHOW CREATE TABLE
 show create table orders2;
-+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                result |
-+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                             result |
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders2` (
   `user` BIGINT NOT NULL,
   `product_id` BIGINT NOT NULL,
@@ -484,25 +564,26 @@ show create table orders2;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'datagen'
 )
  |
-+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
 # test alter table add multiple columns
 alter table orders2 add (user_email string not null after `user`, cleaned_product as coalesce(product, 'missing_sku') after product, trade_order_id bigint not null first);
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table schema using SHOW CREATE TABLE
 show create table orders2;
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            result |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         result |
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | CREATE TABLE `default_catalog`.`default_database`.`orders2` (
   `trade_order_id` BIGINT NOT NULL,
   `user` BIGINT NOT NULL,
@@ -514,12 +595,13 @@ show create table orders2;
   `ts` TIMESTAMP(3),
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
-) WITH (
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
   'connector' = 'datagen'
 )
  |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
@@ -528,7 +610,7 @@ show create table orders2;
 # ==========================================================================
 # test alter table schema modify primary key
 alter table orders2 modify constraint order_constraint primary key (trade_order_id) not enforced;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table schema using SHOW CREATE TABLE
@@ -548,7 +630,8 @@ show create table orders2;
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
   CONSTRAINT `order_constraint` PRIMARY KEY (`trade_order_id`) NOT ENFORCED
-) WITH (
+)
+WITH (
   'connector' = 'datagen'
 )
  |
@@ -558,7 +641,7 @@ show create table orders2;
 
 # test alter table schema modify watermark offset, change column position
 alter table orders2 modify (watermark for ts as ts - interval '1' minute, ts timestamp(3) not null after trade_order_id, `user` string);
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table schema using SHOW CREATE TABLE
@@ -578,7 +661,8 @@ show create table orders2;
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' MINUTE,
   CONSTRAINT `order_constraint` PRIMARY KEY (`trade_order_id`) NOT ENFORCED
-) WITH (
+)
+WITH (
   'connector' = 'datagen'
 )
  |
@@ -591,7 +675,7 @@ show create table orders2;
 # ==========================================================================
 
 alter table orders2 drop (amount1, product, cleaned_product);
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options using SHOW CREATE TABLE
@@ -608,7 +692,8 @@ show create table orders2;
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' MINUTE,
   CONSTRAINT `order_constraint` PRIMARY KEY (`trade_order_id`) NOT ENFORCED
-) WITH (
+)
+WITH (
   'connector' = 'datagen'
 )
  |
@@ -621,7 +706,7 @@ show create table orders2;
 # ==========================================================================
 
 alter table orders2 drop primary key;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options using SHOW CREATE TABLE
@@ -637,7 +722,8 @@ show create table orders2;
   `product_id` BIGINT NOT NULL,
   `ptime` AS PROCTIME(),
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' MINUTE
-) WITH (
+)
+WITH (
   'connector' = 'datagen'
 )
  |
@@ -650,7 +736,7 @@ show create table orders2;
 # ==========================================================================
 
 alter table orders2 drop watermark;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table options using SHOW CREATE TABLE
@@ -665,7 +751,8 @@ show create table orders2;
   `user_email` VARCHAR(2147483647) NOT NULL,
   `product_id` BIGINT NOT NULL,
   `ptime` AS PROCTIME()
-) WITH (
+)
+WITH (
   'connector' = 'datagen'
 )
  |
@@ -711,7 +798,7 @@ desc orders2;
 # ==========================================================================
 
 drop table orders2;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # verify table is dropped
@@ -730,7 +817,7 @@ create temporary table tbl1 (
 ) with (
  'connector' = 'datagen'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # TODO: warning users the table already exists
@@ -741,7 +828,7 @@ create temporary table if not exists tbl1 (
 ) with (
  'connector' = 'datagen'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # list permanent and temporary tables together
@@ -763,7 +850,8 @@ show create table tbl1;
   `user` BIGINT NOT NULL,
   `product` VARCHAR(32),
   `amount` INT
-) WITH (
+)
+WITH (
   'connector' = 'datagen'
 )
  |
@@ -772,7 +860,7 @@ show create table tbl1;
 !ok
 
 drop temporary table tbl1;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # ==========================================================================
@@ -780,7 +868,7 @@ drop temporary table tbl1;
 # ==========================================================================
 
 create table `mod` (`table` string, `database` string) with ('connector' = 'values');
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 describe `mod`;
@@ -804,7 +892,7 @@ desc `mod`;
 !ok
 
 drop table `mod`;
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 show tables;
@@ -812,49 +900,97 @@ Empty set
 !ok
 
 # ==========================================================================
-# test describe table with comment
+# test describe/showColumns/showCreateTable with comment
 # ==========================================================================
 
 CREATE TABLE `default_catalog`.`default_database`.`orders3` (
-  `user` BIGINT NOT NULL comment 'this is the first column',
+  `user` BIGINT NOT NULL comment 'this is the primary key, named ''user''.',
   `product` VARCHAR(32),
   `amount` INT,
-  `ts` TIMESTAMP(3) comment 'notice: watermark',
-  `ptime` AS PROCTIME() comment 'notice: computed column',
+  `ts` TIMESTAMP(3) comment 'notice: watermark, named ''ts''.',
+  `ptime` AS PROCTIME() comment 'notice: computed column, named ''ptime''.',
   WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
-  CONSTRAINT `PK_3599338` PRIMARY KEY (`user`) NOT ENFORCED
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
 ) WITH (
   'connector' = 'kafka',
   'scan.startup.mode' = 'earliest-offset'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
+# test describe
 describe orders3;
-+---------+-----------------------------+-------+-----------+---------------+----------------------------+--------------------------+
-|    name |                        type |  null |       key |        extras |                  watermark |                  comment |
-+---------+-----------------------------+-------+-----------+---------------+----------------------------+--------------------------+
-|    user |                      BIGINT | FALSE | PRI(user) |               |                            | this is the first column |
-| product |                 VARCHAR(32) |  TRUE |           |               |                            |                          |
-|  amount |                         INT |  TRUE |           |               |                            |                          |
-|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |        notice: watermark |
-|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            |  notice: computed column |
-+---------+-----------------------------+-------+-----------+---------------+----------------------------+--------------------------+
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |                                 comment |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |  this is the primary key, named 'user'. |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |                                         |
+|  amount |                         INT |  TRUE |           |               |                            |                                         |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |          notice: watermark, named 'ts'. |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            | notice: computed column, named 'ptime'. |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
 5 rows in set
 !ok
 
-# test desc table
+# test desc
 desc orders3;
-+---------+-----------------------------+-------+-----------+---------------+----------------------------+--------------------------+
-|    name |                        type |  null |       key |        extras |                  watermark |                  comment |
-+---------+-----------------------------+-------+-----------+---------------+----------------------------+--------------------------+
-|    user |                      BIGINT | FALSE | PRI(user) |               |                            | this is the first column |
-| product |                 VARCHAR(32) |  TRUE |           |               |                            |                          |
-|  amount |                         INT |  TRUE |           |               |                            |                          |
-|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |        notice: watermark |
-|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            |  notice: computed column |
-+---------+-----------------------------+-------+-----------+---------------+----------------------------+--------------------------+
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |                                 comment |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |  this is the primary key, named 'user'. |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |                                         |
+|  amount |                         INT |  TRUE |           |               |                            |                                         |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |          notice: watermark, named 'ts'. |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            | notice: computed column, named 'ptime'. |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
 5 rows in set
+!ok
+
+# test show columns
+show columns from orders3;
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+|    name |                        type |  null |       key |        extras |                  watermark |                                 comment |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+|    user |                      BIGINT | FALSE | PRI(user) |               |                            |  this is the primary key, named 'user'. |
+| product |                 VARCHAR(32) |  TRUE |           |               |                            |                                         |
+|  amount |                         INT |  TRUE |           |               |                            |                                         |
+|      ts |      TIMESTAMP(3) *ROWTIME* |  TRUE |           |               | `ts` - INTERVAL '1' SECOND |          notice: watermark, named 'ts'. |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |           | AS PROCTIME() |                            | notice: computed column, named 'ptime'. |
++---------+-----------------------------+-------+-----------+---------------+----------------------------+-----------------------------------------+
+5 rows in set
+!ok
+
+show columns in orders3 like 'p%';
++---------+-----------------------------+-------+-----+---------------+-----------+-----------------------------------------+
+|    name |                        type |  null | key |        extras | watermark |                                 comment |
++---------+-----------------------------+-------+-----+---------------+-----------+-----------------------------------------+
+| product |                 VARCHAR(32) |  TRUE |     |               |           |                                         |
+|   ptime | TIMESTAMP_LTZ(3) *PROCTIME* | FALSE |     | AS PROCTIME() |           | notice: computed column, named 'ptime'. |
++---------+-----------------------------+-------+-----+---------------+-----------+-----------------------------------------+
+2 rows in set
+!ok
+
+# test show create table
+show create table orders3;
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       result |
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| CREATE TABLE `default_catalog`.`default_database`.`orders3` (
+  `user` BIGINT NOT NULL COMMENT 'this is the primary key, named ''user''.',
+  `product` VARCHAR(32),
+  `amount` INT,
+  `ts` TIMESTAMP(3) COMMENT 'notice: watermark, named ''ts''.',
+  `ptime` AS PROCTIME() COMMENT 'notice: computed column, named ''ptime''.',
+  WATERMARK FOR `ts` AS `ts` - INTERVAL '1' SECOND,
+  CONSTRAINT `PK_user` PRIMARY KEY (`user`) NOT ENFORCED
+)
+WITH (
+  'connector' = 'kafka',
+  'scan.startup.mode' = 'earliest-offset'
+)
+ |
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+1 row in set
 !ok
 
 # ==========================================================================
@@ -872,7 +1008,7 @@ CREATE TABLE IF NOT EXISTS orders (
 ) with (
  'connector' = 'datagen'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 CREATE TABLE IF NOT EXISTS orders2 (
@@ -884,7 +1020,7 @@ CREATE TABLE IF NOT EXISTS orders2 (
 ) with (
  'connector' = 'blackhole'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 CREATE TABLE IF NOT EXISTS daily_orders (
@@ -898,7 +1034,7 @@ CREATE TABLE IF NOT EXISTS daily_orders (
  'path' = '$VAR_BATCH_PATH',
  'format' = 'csv'
 );
-[INFO] Execute statement succeed.
+[INFO] Execute statement succeeded.
 !info
 
 # test explain plan for select
@@ -980,9 +1116,9 @@ Sink(table=[default_catalog.default_database.daily_orders], fields=[user, produc
 
 # test explain plan for insert overwrite with static partition
 explain plan for insert into daily_orders partition (dt = '2022-06-12') select `user`, product, amount from daily_orders where dt = '2022-06-12';
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  result |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       result |
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | == Abstract Syntax Tree ==
 LogicalSink(table=[default_catalog.default_database.daily_orders], fields=[user, product, amount, EXPR$3])
 +- LogicalProject(user=[$0], product=[$1], amount=[$2], EXPR$3=[_UTF-16LE'2022-06-12':VARCHAR(2147483647) CHARACTER SET "UTF-16LE"])
@@ -991,15 +1127,13 @@ LogicalSink(table=[default_catalog.default_database.daily_orders], fields=[user,
 
 == Optimized Physical Plan ==
 Sink(table=[default_catalog.default_database.daily_orders], fields=[user, product, amount, EXPR$3])
-+- Calc(select=[user, product, amount, _UTF-16LE'2022-06-12':VARCHAR(2147483647) CHARACTER SET "UTF-16LE" AS EXPR$3])
-   +- TableSourceScan(table=[[default_catalog, default_database, daily_orders, partitions=[], project=[user, product, amount], metadata=[]]], fields=[user, product, amount])
++- Values(type=[RecordType(BIGINT user, VARCHAR(2147483647) product, INTEGER amount, VARCHAR(2147483647) EXPR$3)], tuples=[[]])
 
 == Optimized Execution Plan ==
 Sink(table=[default_catalog.default_database.daily_orders], fields=[user, product, amount, EXPR$3])
-+- Calc(select=[user, product, amount, '2022-06-12' AS EXPR$3])
-   +- TableSourceScan(table=[[default_catalog, default_database, daily_orders, partitions=[], project=[user, product, amount], metadata=[]]], fields=[user, product, amount])
++- Values(tuples=[[]])
  |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
@@ -1058,9 +1192,9 @@ Sink(table=[default_catalog.default_database.orders2], fields=[user, product, am
 
 # test explain insert with json format
 explain json_execution_plan insert into orders2 select `user`, product, amount, ts from orders;
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                result |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             result |
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | == Abstract Syntax Tree ==
 LogicalSink(table=[default_catalog.default_database.orders2], fields=[user, product, amount, ts])
 +- LogicalProject(user=[$0], product=[$1], amount=[$2], ts=[$3])
@@ -1110,9 +1244,20 @@ Sink(table=[default_catalog.default_database.orders2], fields=[user, product, am
     } ]
   }, {
     "id" : ,
-    "type" : "Sink: orders2[]",
-    "pact" : "Data Sink",
-    "contents" : "[]:Sink(table=[default_catalog.default_database.orders2], fields=[user, product, amount, ts])",
+    "type" : "StreamRecordTimestampInserter[]",
+    "pact" : "Operator",
+    "contents" : "[]:StreamRecordTimestampInserter(rowtime field: 3)",
+    "parallelism" : 1,
+    "predecessors" : [ {
+      "id" : ,
+      "ship_strategy" : "FORWARD",
+      "side" : "second"
+    } ]
+  }, {
+    "id" : ,
+    "type" : "orders2[]: Writer",
+    "pact" : "Operator",
+    "contents" : "orders2[]: Writer",
     "parallelism" : 1,
     "predecessors" : [ {
       "id" : ,
@@ -1121,15 +1266,15 @@ Sink(table=[default_catalog.default_database.orders2], fields=[user, product, am
     } ]
   } ]
 } |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
 # test explain select with json format
 explain json_execution_plan select `user`, product from orders;
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            result |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              result |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | == Abstract Syntax Tree ==
 LogicalProject(user=[$0], product=[$1])
 +- LogicalWatermarkAssigner(rowtime=[ts], watermark=[-($3, 1000:INTERVAL SECOND)])
@@ -1191,7 +1336,7 @@ Calc(select=[user, product])
     } ]
   } ]
 } |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok
 
@@ -1286,9 +1431,9 @@ GroupAggregate(select=[SUM(amount) AS revenue, COUNT(DISTINCT user) AS buyer_cnt
 
 # test explain select with all details
 explain changelog_mode, estimated_cost, plan_advice, json_execution_plan select `user`, product from orders;
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            result |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              result |
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | == Abstract Syntax Tree ==
 LogicalProject(user=[$0], product=[$1])
 +- LogicalWatermarkAssigner(rowtime=[ts], watermark=[-($3, 1000:INTERVAL SECOND)])
@@ -1352,6 +1497,6 @@ Calc(select=[user, product])
     } ]
   } ]
 } |
-+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set
 !ok

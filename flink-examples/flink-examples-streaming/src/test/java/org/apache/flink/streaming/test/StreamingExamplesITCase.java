@@ -25,46 +25,33 @@ import org.apache.flink.api.common.eventtime.WatermarkGenerator;
 import org.apache.flink.api.common.eventtime.WatermarkGeneratorSupplier;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.serialization.SimpleStringEncoder;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.core.fs.FileSystem;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.connector.file.sink.FileSink;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.examples.iteration.util.IterateExampleData;
 import org.apache.flink.streaming.test.examples.join.WindowJoinData;
 import org.apache.flink.test.testdata.WordCountData;
-import org.apache.flink.test.util.AbstractTestBase;
+import org.apache.flink.test.util.AbstractTestBaseJUnit4;
 
 import org.apache.commons.io.FileUtils;
 import org.junit.Test;
 
 import java.io.File;
+import java.nio.file.Files;
 
 import static org.apache.flink.test.util.TestBaseUtils.checkLinesAgainstRegexp;
 import static org.apache.flink.test.util.TestBaseUtils.compareResultsByLinesInMemory;
 
 /** Integration test for streaming programs in Java examples. */
-public class StreamingExamplesITCase extends AbstractTestBase {
-
-    @Test
-    public void testIterateExample() throws Exception {
-        final String inputPath =
-                createTempFile("fibonacciInput.txt", IterateExampleData.INPUT_PAIRS);
-        final String resultPath = getTempDirPath("result");
-
-        // the example is inherently non-deterministic. The iteration timeout of 5000 ms
-        // is frequently not enough to make the test run stable on CI infrastructure
-        // with very small containers, so we cannot do a validation here
-        org.apache.flink.streaming.examples.iteration.IterateExample.main(
-                new String[] {
-                    "--input", inputPath,
-                    "--output", resultPath
-                });
-    }
+public class StreamingExamplesITCase extends AbstractTestBaseJUnit4 {
 
     @Test
     public void testWindowJoin() throws Exception {
 
-        final String resultPath = File.createTempFile("result-path", "dir").toURI().toString();
+        final String resultPath = Files.createTempDirectory("result-path").toUri().toString();
 
         final class Parser implements MapFunction<String, Tuple2<String, Integer>> {
 
@@ -80,17 +67,22 @@ public class StreamingExamplesITCase extends AbstractTestBase {
                     StreamExecutionEnvironment.getExecutionEnvironment();
 
             DataStream<Tuple2<String, Integer>> grades =
-                    env.fromElements(WindowJoinData.GRADES_INPUT.split("\n"))
+                    env.fromData(WindowJoinData.GRADES_INPUT.split("\n"))
                             .assignTimestampsAndWatermarks(IngestionTimeWatermarkStrategy.create())
                             .map(new Parser());
 
             DataStream<Tuple2<String, Integer>> salaries =
-                    env.fromElements(WindowJoinData.SALARIES_INPUT.split("\n"))
+                    env.fromData(WindowJoinData.SALARIES_INPUT.split("\n"))
                             .assignTimestampsAndWatermarks(IngestionTimeWatermarkStrategy.create())
                             .map(new Parser());
 
             org.apache.flink.streaming.examples.join.WindowJoin.runWindowJoin(grades, salaries, 100)
-                    .writeAsText(resultPath, FileSystem.WriteMode.OVERWRITE);
+                    .sinkTo(
+                            FileSink.forRowFormat(
+                                            new Path(resultPath),
+                                            new SimpleStringEncoder<
+                                                    Tuple3<String, Integer, Integer>>())
+                                    .build());
 
             env.execute();
 
@@ -135,6 +127,28 @@ public class StreamingExamplesITCase extends AbstractTestBase {
     }
 
     @Test
+    public void testAsyncWindowWordCount() throws Exception {
+        final String windowSize = "25";
+        final String slideSize = "15";
+        final String textPath = createTempFile("text.txt", WordCountData.TEXT);
+        final String resultPath = getTempDirPath("result");
+
+        org.apache.flink.streaming.examples.windowing.WindowWordCount.main(
+                new String[] {
+                    "--input", textPath,
+                    "--output", resultPath,
+                    "--window", windowSize,
+                    "--slide", slideSize,
+                    "--async-state"
+                });
+
+        // since the parallel tokenizers might have different speed
+        // the exact output can not be checked just whether it is well-formed
+        // checks that the result lines look like e.g. (faust, 2)
+        checkLinesAgainstRegexp(resultPath, "^\\([a-z]+,(\\d)+\\)");
+    }
+
+    @Test
     public void testWordCount() throws Exception {
         final String textPath = createTempFile("text.txt", WordCountData.TEXT);
         final String resultPath = getTempDirPath("result");
@@ -147,6 +161,25 @@ public class StreamingExamplesITCase extends AbstractTestBase {
                 });
 
         compareResultsByLinesInMemory(WordCountData.COUNTS_AS_TUPLES, resultPath);
+    }
+
+    @Test
+    public void testWordCountWithAsyncState() throws Exception {
+        final String textPath = createTempFile("text.txt", WordCountData.TEXT);
+        final String resultPath = getTempDirPath("result");
+
+        org.apache.flink.streaming.examples.wordcount.WordCount.main(
+                new String[] {
+                    "--input",
+                    textPath,
+                    "--output",
+                    resultPath,
+                    "--execution-mode",
+                    "streaming",
+                    "--async-state"
+                });
+
+        compareResultsByLinesInMemory(WordCountData.STREAMING_COUNTS_AS_TUPLES, resultPath);
     }
 
     /**

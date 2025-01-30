@@ -19,7 +19,6 @@
 
 package org.apache.flink.runtime.scheduler;
 
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
 import org.apache.flink.runtime.execution.ExecutionState;
@@ -35,6 +34,7 @@ import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -62,7 +62,7 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
 
     private final ExecutionVertexVersioner executionVertexVersioner;
 
-    private final Time partitionRegistrationTimeout;
+    private final Duration partitionRegistrationTimeout;
 
     private final BiConsumer<ExecutionVertexID, AllocationID> allocationReservationFunc;
 
@@ -73,7 +73,7 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
             final ExecutionSlotAllocator executionSlotAllocator,
             final ExecutionOperations executionOperations,
             final ExecutionVertexVersioner executionVertexVersioner,
-            final Time partitionRegistrationTimeout,
+            final Duration partitionRegistrationTimeout,
             final BiConsumer<ExecutionVertexID, AllocationID> allocationReservationFunc,
             final ComponentMainThreadExecutor mainThreadExecutor) {
 
@@ -94,12 +94,12 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
 
         transitionToScheduled(executionsToDeploy);
 
-        final List<ExecutionSlotAssignment> executionSlotAssignments =
+        final Map<ExecutionAttemptID, ExecutionSlotAssignment> executionSlotAssignmentMap =
                 allocateSlotsFor(executionsToDeploy);
 
         final List<ExecutionDeploymentHandle> deploymentHandles =
                 createDeploymentHandles(
-                        executionsToDeploy, requiredVersionByVertex, executionSlotAssignments);
+                        executionsToDeploy, requiredVersionByVertex, executionSlotAssignmentMap);
 
         waitForAllSlotsAndDeploy(deploymentHandles);
     }
@@ -118,7 +118,7 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
         executionsToDeploy.forEach(e -> e.transitionState(ExecutionState.SCHEDULED));
     }
 
-    private List<ExecutionSlotAssignment> allocateSlotsFor(
+    private Map<ExecutionAttemptID, ExecutionSlotAssignment> allocateSlotsFor(
             final List<Execution> executionsToDeploy) {
         final List<ExecutionAttemptID> executionAttemptIds =
                 executionsToDeploy.stream()
@@ -130,14 +130,13 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
     private List<ExecutionDeploymentHandle> createDeploymentHandles(
             final List<Execution> executionsToDeploy,
             final Map<ExecutionVertexID, ExecutionVertexVersion> requiredVersionByVertex,
-            final List<ExecutionSlotAssignment> executionSlotAssignments) {
-
+            final Map<ExecutionAttemptID, ExecutionSlotAssignment> executionSlotAssignmentMap) {
+        checkState(executionsToDeploy.size() == executionSlotAssignmentMap.size());
         final List<ExecutionDeploymentHandle> deploymentHandles =
                 new ArrayList<>(executionsToDeploy.size());
-        for (int i = 0; i < executionsToDeploy.size(); i++) {
-            final Execution execution = executionsToDeploy.get(i);
-            final ExecutionSlotAssignment assignment = executionSlotAssignments.get(i);
-            checkState(execution.getAttemptId().equals(assignment.getExecutionAttemptId()));
+        for (final Execution execution : executionsToDeploy) {
+            final ExecutionSlotAssignment assignment =
+                    checkNotNull(executionSlotAssignmentMap.get(execution.getAttemptId()));
 
             final ExecutionVertexID executionVertexId = execution.getVertex().getID();
             final ExecutionDeploymentHandle deploymentHandle =
@@ -278,9 +277,12 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
 
                 return FutureUtils.orTimeout(
                         partitionRegistrationFuture,
-                        partitionRegistrationTimeout.toMilliseconds(),
+                        partitionRegistrationTimeout.toMillis(),
                         TimeUnit.MILLISECONDS,
-                        mainThreadExecutor);
+                        mainThreadExecutor,
+                        String.format(
+                                "Registering produced partitions for execution %s timed out after %d ms.",
+                                execution.getAttemptId(), partitionRegistrationTimeout.toMillis()));
             } else {
                 return FutureUtils.completedVoidFuture();
             }
@@ -370,7 +372,7 @@ public class DefaultExecutionDeployer implements ExecutionDeployer {
                 ExecutionSlotAllocator executionSlotAllocator,
                 ExecutionOperations executionOperations,
                 ExecutionVertexVersioner executionVertexVersioner,
-                Time partitionRegistrationTimeout,
+                Duration partitionRegistrationTimeout,
                 BiConsumer<ExecutionVertexID, AllocationID> allocationReservationFunc,
                 ComponentMainThreadExecutor mainThreadExecutor) {
             return new DefaultExecutionDeployer(

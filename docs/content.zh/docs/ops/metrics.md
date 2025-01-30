@@ -1,6 +1,6 @@
 ---
 title: "指标"
-weight: 6
+weight: 5
 type: docs
 aliases:
   - /zh/ops/metrics.html
@@ -52,7 +52,7 @@ public class MyMapper extends RichMapFunction<String, String> {
   private transient Counter counter;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     this.counter = getRuntimeContext()
       .getMetricGroup()
       .counter("myCounter");
@@ -116,7 +116,7 @@ public class MyMapper extends RichMapFunction<String, String> {
   private transient Counter counter;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     this.counter = getRuntimeContext()
       .getMetricGroup()
       .counter("myCustomCounter", new CustomCounter());
@@ -173,7 +173,7 @@ public class MyMapper extends RichMapFunction<String, String> {
   private transient int valueToExpose = 0;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     getRuntimeContext()
       .getMetricGroup()
       .gauge("MyGauge", new Gauge<Integer>() {
@@ -247,7 +247,7 @@ public class MyMapper extends RichMapFunction<Long, Long> {
   private transient Histogram histogram;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     this.histogram = getRuntimeContext()
       .getMetricGroup()
       .histogram("myHistogram", new MyHistogram());
@@ -307,7 +307,7 @@ public class MyMapper extends RichMapFunction<Long, Long> {
   private transient Histogram histogram;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     com.codahale.metrics.Histogram dropwizardHistogram =
       new com.codahale.metrics.Histogram(new SlidingWindowReservoir(500));
 
@@ -366,7 +366,7 @@ public class MyMapper extends RichMapFunction<Long, Long> {
   private transient Meter meter;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     this.meter = getRuntimeContext()
       .getMetricGroup()
       .meter("myMeter", new MyMeter());
@@ -440,7 +440,7 @@ public class MyMapper extends RichMapFunction<Long, Long> {
   private transient Meter meter;
 
   @Override
-  public void open(Configuration config) {
+  public void open(OpenContext ctx) {
     com.codahale.metrics.Meter dropwizardMeter = new com.codahale.metrics.Meter();
 
     this.meter = getRuntimeContext()
@@ -492,7 +492,7 @@ Every metric is assigned an identifier and a set of key-value pairs under which 
 The identifier is based on 3 components: a user-defined name when registering the metric, an optional user-defined scope and a system-provided scope.
 For example, if `A.B` is the system scope, `C.D` the user scope and `E` the name, then the identifier for the metric will be `A.B.C.D.E`.
 
-You can configure which delimiter to use for the identifier (default: `.`) by setting the `metrics.scope.delimiter` key in `conf/flink-conf.yaml`.
+You can configure which delimiter to use for the identifier (default: `.`) by setting the `metrics.scope.delimiter` key in [Flink configuration file]({{< ref "docs/deployment/config#flink-配置文件" >}}).
 
 ### User Scope
 
@@ -551,7 +551,7 @@ counter = runtime_context \
 
 The system scope contains context information about the metric, for example in which task it was registered or what job that task belongs to.
 
-Which context information should be included can be configured by setting the following keys in `conf/flink-conf.yaml`.
+Which context information should be included can be configured by setting the following keys in [Flink configuration file]({{< ref "docs/deployment/config#flink-配置文件" >}}).
 Each of these keys expect a format string that may contain constants (e.g. "taskmanager") and variables (e.g. "&lt;task_id&gt;") which will be replaced at runtime.
 
 - `metrics.scope.jm`
@@ -1270,13 +1270,13 @@ Whether these metrics are reported depends on the [metrics.job.status.enable]({{
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>fullRestarts</td>
-      <td><span class="label label-danger">Attention:</span> deprecated, use <b>numRestarts</b>.</td>
+      <td>numRestarts</td>
+      <td>The total number of restarts since this job was submitted, including full restarts, fine-grained restarts and restarts triggered by rescaling.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>numRestarts</td>
-      <td>The total number of restarts since this job was submitted, including full restarts and fine-grained restarts.</td>
+      <td>numRescales</td>
+      <td>The total number of restarts triggered by rescaling, including scale up and scale down.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -1310,6 +1310,11 @@ Note that for failed checkpoints, metrics are updated on a best efforts basis an
     <tr>
       <td>lastCompletedCheckpointId</td>
       <td>The identifier of the last completed checkpoint.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>lastCheckpointCompletedTimestamp</td>
+      <td>The timestamp of the last completed checkpoint (in milliseconds).</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -1356,6 +1361,27 @@ Note that for failed checkpoints, metrics are updated on a best efforts basis an
     <tr>
       <td>checkpointStartDelayNanos</td>
       <td>The time in nanoseconds that elapsed between the creation of the last checkpoint and the time when the checkpointing process has started by this Task. This delay shows how long it takes for the first checkpoint barrier to reach the task. A high value indicates back-pressure. If only a specific task has a long start delay, the most likely reason is data skew.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <th rowspan="4"><strong>Job (only available on TaskManager)</strong></th>
+      <td>fileMerging.logicalFileCount</td>
+      <td>The number of logical files of file merging mechanism.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>fileMerging.logicalFileSize</td>
+      <td>The total size of logical files of file merging mechanism on one task manager for one job.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>fileMerging.physicalFileCount</td>
+      <td>The number of physical files of file merging mechanism.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>fileMerging.physicalFileSize</td>
+      <td>The total size of physical files of file merging mechanism on one task manager for one job, usually larger than <samp>fileMerging.logicalFileSize</samp>.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -1515,6 +1541,43 @@ Note that for failed checkpoints, metrics are updated on a best efforts basis an
 ### RocksDB
 Certain RocksDB native metrics are available but disabled by default, you can find full documentation [here]({{< ref "docs/deployment/config" >}}#rocksdb-native-metrics)
 
+### ForStDB
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style="width: 15%">Scope</th>
+      <th class="text-left" style="width: 15%">Infix</th>
+      <th class="text-left" style="width: 15%">Metrics</th>
+      <th class="text-left" style="width: 50%">Description</th>
+      <th class="text-left" style="width: 5%">Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="4"><strong>Task/Operator</strong></th>
+      <td rowspan="4">forst.fileCache</td>
+      <td>hit</td>
+      <td>The hit count of ForSt state backend cache.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>miss</td>
+      <td>The miss count of ForSt state backend cache.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>usedBytes</td>
+      <td>The bytes cached in ForSt state backend cache.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>remainingBytes</td>
+      <td>The remaining space in the volume for the configured cache. Only available when 'state.backend.forst.cache.reserve-size' is set above 0. </td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
 ### State Changelog
 
 Note that the metrics are only available via reporters.
@@ -1632,7 +1695,7 @@ Note that the metrics are only available via reporters.
       <td>Histogram</td>
     </tr>
     <tr>
-      <th rowspan="23"><strong>Task</strong></th>
+      <th rowspan="27"><strong>Task</strong></th>
       <td>numBytesInLocal</td>
       <td><span class="label label-danger">Attention:</span> deprecated, use <a href="{{< ref "docs/ops/metrics" >}}#default-shuffle-service">Default shuffle service metrics</a>.</td>
       <td>Counter</td>
@@ -1693,6 +1756,16 @@ Note that the metrics are only available via reporters.
       <td>Meter</td>
     </tr>
     <tr>
+      <td>numFiredTimers</td>
+      <td>The total number of timers this task has fired.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>numFiredTimersPerSecond</td>
+      <td>The number of timers this task fires per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
       <td>isBackPressured</td>
       <td>Whether the task is back-pressured.</td>
       <td>Gauge</td>
@@ -1733,6 +1806,11 @@ Note that the metrics are only available via reporters.
       <td>Gauge</td>
     </tr>
     <tr>
+      <td>changelogBusyTimeMsPerSecond</td>
+      <td>The time (in milliseconds) taken by the Changelog state backend to do IO operations, only positive when Changelog state backend is enabled. Please check 'state.changelog.dstl.dfs.upload.max-in-flight' for more information.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>mailboxMailsPerSecond</td>
       <td>The number of actions processed from the task's mailbox per second which includes all actions, e.g., checkpointing, timer, or cancellation actions.</td>
       <td>Meter</td>
@@ -1746,6 +1824,11 @@ Note that the metrics are only available via reporters.
       <td>mailboxQueueSize</td>
       <td>The number of actions in the task's mailbox that are waiting to be processed.</td>
       <td>Gauge</td>
+    </tr>
+   <tr>
+      <td>initializationTime</td>
+      <td>The time in milliseconds that one task spends on initialization, return 0 when the task is not in initialization/running status. Most of the initialization time is usually spent in restoring from the checkpoint.</td>
+      <td>Counter</td>
     </tr>
     <tr>
       <td rowspan="2"><strong>Task (only if buffer debloating is enabled and in non-source tasks)</strong></td>
@@ -2199,6 +2282,44 @@ logged by `SystemResourcesMetricsInitializer` during the startup.
   </tbody>
 </table>
 
+### Async State Processing
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style="width: 15%">Scope</th>
+      <th class="text-left" style="width: 10%">Infix</th>
+      <th class="text-left" style="width: 20%">Metrics</th>
+      <th class="text-left" style="width: 50%">Description</th>
+      <th class="text-left" style="width: 5%">Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="4"><strong>Operator</strong></th>
+      <td rowspan="4">asyncStateProcessing</td>
+      <td>numInFlightRecords</td>
+      <td>The number of in-flight records in the async execution controller's buffers.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>activeBufferSize</td>
+      <td>The number of records which are pending to be processed.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>blockingBufferSize</td>
+      <td>The number of records which are blocked by the ongoing records.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>numBlockingKeys</td>
+      <td>The number of different keys are blocked in async execution controller.</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
 ## End-to-End latency tracking
 
 Flink allows to track the latency of records travelling through the system. This feature is disabled by default.
@@ -2231,12 +2352,12 @@ purposes.
 ## State access latency tracking
 
 Flink also allows to track the keyed state access latency for standard Flink state-backends or customized state backends which extending from `AbstractStateBackend`. This feature is disabled by default.
-To enable this feature you must set the `state.backend.latency-track.keyed-state-enabled` to true in the [Flink configuration]({{< ref "docs/deployment/config" >}}#state-backends-latency-tracking-options).
+To enable this feature you must set the `state.latency-track.keyed-state-enabled` to true in the [Flink configuration]({{< ref "docs/deployment/config" >}}#state-backends-latency-tracking-options).
 
-Once tracking keyed state access latency is enabled, Flink will sample the state access latency every `N` access, in which `N` is defined by `state.backend.latency-track.sample-interval`.
+Once tracking keyed state access latency is enabled, Flink will sample the state access latency every `N` access, in which `N` is defined by `state.latency-track.sample-interval`.
 This configuration has a default value of 100. A smaller value will get more accurate results but have a higher performance impact since it is sampled more frequently.
 
-As the type of this latency metrics is histogram, `state.backend.latency-track.history-size` will control the maximum number of recorded values in history, which has the default value of 128.
+As the type of this latency metrics is histogram, `state.latency-track.history-size` will control the maximum number of recorded values in history, which has the default value of 128.
 A larger value of this configuration will require more memory, but will provide a more accurate result.
 
 <span class="label label-danger">Warning</span> Enabling state-access-latency metrics may impact the performance.
@@ -2262,6 +2383,7 @@ Request metrics aggregated across all entities of the respective type:
   - `/taskmanagers/metrics`
   - `/jobs/metrics`
   - `/jobs/<jobid>/vertices/<vertexid>/subtasks/metrics`
+  - `/jobs/<jobid>/vertices/<vertexid>/jm-operator-metrics`
 
 Request metrics aggregated over a subset of all entities of the respective type:
 

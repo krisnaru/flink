@@ -19,24 +19,25 @@ package org.apache.flink.table.api
 
 import org.apache.flink.api.common.RuntimeExecutionMode
 import org.apache.flink.api.common.typeinfo.Types.STRING
-import org.apache.flink.api.scala._
 import org.apache.flink.configuration.{Configuration, CoreOptions, ExecutionOptions}
 import org.apache.flink.core.testutils.FlinkAssertions.anyCauseMatches
-import org.apache.flink.streaming.api.environment.LocalStreamEnvironment
-import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
-import org.apache.flink.table.api.bridge.scala.{StreamTableEnvironment, _}
+import org.apache.flink.streaming.api.environment.{LocalStreamEnvironment, StreamExecutionEnvironment}
+import org.apache.flink.table.api.bridge.scala._
 import org.apache.flink.table.api.internal.TableEnvironmentInternal
 import org.apache.flink.table.catalog._
 import org.apache.flink.table.factories.{TableFactoryUtil, TableSourceFactoryContextImpl}
 import org.apache.flink.table.functions.TestGenericUDF
+import org.apache.flink.table.legacy.api.TableSchema
 import org.apache.flink.table.module.ModuleEntry
 import org.apache.flink.table.planner.factories.utils.TestCollectionTableFactory._
 import org.apache.flink.table.planner.runtime.stream.sql.FunctionITCase.TestUDF
 import org.apache.flink.table.planner.runtime.stream.table.FunctionITCase.SimpleScalarFunction
+import org.apache.flink.table.planner.runtime.utils.StreamingEnvUtil
 import org.apache.flink.table.planner.utils.{TableTestUtil, TestTableSourceSinks}
 import org.apache.flink.table.planner.utils.TableTestUtil.{replaceNodeIdInOperator, replaceStageId, replaceStreamNodeId}
 import org.apache.flink.table.types.DataType
 import org.apache.flink.table.utils.UserDefinedFunctions.{GENERATED_LOWER_UDF_CLASS, GENERATED_LOWER_UDF_CODE}
+import org.apache.flink.testutils.junit.utils.TempDirUtils
 import org.apache.flink.types.Row
 import org.apache.flink.util.UserClassLoaderJarTestUtils
 
@@ -45,58 +46,61 @@ import _root_.scala.collection.JavaConverters._
 import org.apache.calcite.plan.RelOptUtil
 import org.apache.calcite.sql.SqlExplainLevel
 import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
-import org.junit.{Rule, Test}
-import org.junit.Assert.{assertEquals, assertFalse, assertTrue, fail}
-import org.junit.rules.{ExpectedException, TemporaryFolder}
+import org.junit.jupiter.api.Assertions.{assertEquals, assertFalse, assertTrue, fail}
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 
 import java.io.File
+import java.nio.file.Path
 import java.util.{Collections, UUID}
-
-import scala.annotation.meta.getter
 
 class TableEnvironmentTest {
 
-  // used for accurate exception information checking.
-  val expectedException: ExpectedException = ExpectedException.none()
+  @TempDir
+  var tempFolder: Path = _
 
-  @Rule
-  def thrown: ExpectedException = expectedException
-
-  @(Rule @getter)
-  val tempFolder: TemporaryFolder = new TemporaryFolder()
-
-  val env = new StreamExecutionEnvironment(new LocalStreamEnvironment())
+  val env = new LocalStreamEnvironment()
   val tableEnv = StreamTableEnvironment.create(env, TableTestUtil.STREAM_SETTING)
   val batchTableEnv = StreamTableEnvironment.create(env, TableTestUtil.BATCH_SETTING)
 
   @Test
   def testScanNonExistTable(): Unit = {
-    thrown.expect(classOf[ValidationException])
-    thrown.expectMessage("Table `MyTable` was not found")
-    tableEnv.from("MyTable")
+    assertThatThrownBy(() => tableEnv.from("MyTable"))
+      .hasMessageContaining("Table `MyTable` was not found")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
   def testRegisterDataStream(): Unit = {
-    val table = env.fromElements[(Int, Long, String, Boolean)]().toTable(tableEnv, 'a, 'b, 'c, 'd)
-    tableEnv.registerTable("MyTable", table)
+    val table = StreamingEnvUtil
+      .fromElements[(Int, Long, String, Boolean)](env)
+      .toTable(tableEnv, 'a, 'b, 'c, 'd)
+    tableEnv.createTemporaryView("MyTable", table)
     val scanTable = tableEnv.from("MyTable")
     val relNode = TableTestUtil.toRelNode(scanTable)
     val actual = RelOptUtil.toString(relNode)
     val expected = "LogicalTableScan(table=[[default_catalog, default_database, MyTable]])\n"
     assertEquals(expected, actual)
 
-    // register on a conflict name
-    thrown.expect(classOf[ValidationException])
-    thrown.expectMessage(
-      "Temporary table '`default_catalog`.`default_database`.`MyTable`' already exists")
-    tableEnv.createTemporaryView("MyTable", env.fromElements[(Int, Long)]())
+    assertThatThrownBy(
+      () =>
+        tableEnv.createTemporaryView(
+          "MyTable",
+          StreamingEnvUtil
+            .fromElements[(Int, Long)](env)))
+      .hasMessageContaining(
+        "Temporary table '`default_catalog`.`default_database`.`MyTable`' already exists")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
   def testSimpleQuery(): Unit = {
-    val table = env.fromElements[(Int, Long, String, Boolean)]().toTable(tableEnv, 'a, 'b, 'c, 'd)
-    tableEnv.registerTable("MyTable", table)
+    val table = StreamingEnvUtil
+      .fromElements[(Int, Long, String, Boolean)](env)
+      .toTable(tableEnv, 'a, 'b, 'c, 'd)
+    tableEnv.createTemporaryView("MyTable", table)
     val queryTable = tableEnv.sqlQuery("SELECT a, c, d FROM MyTable")
     val relNode = TableTestUtil.toRelNode(queryTable)
     val actual = RelOptUtil.toString(relNode, SqlExplainLevel.NO_ATTRIBUTES)
@@ -220,7 +224,7 @@ class TableEnvironmentTest {
   private def validateAddJar(useFullPath: Boolean): Unit = {
     val udfJar = UserClassLoaderJarTestUtils
       .createJarFile(
-        tempFolder.newFolder(String.format("test-jar-%s", UUID.randomUUID)),
+        TempDirUtils.newFolder(tempFolder, String.format("test-jar-%s", UUID.randomUUID)),
         "test-classloader-udf.jar",
         GENERATED_LOWER_UDF_CLASS,
         String.format(GENERATED_LOWER_UDF_CODE, GENERATED_LOWER_UDF_CLASS)
@@ -330,9 +334,9 @@ class TableEnvironmentTest {
         |)
       """.stripMargin
     tableEnv.executeSql(statement)
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage("ALTER TABLE RESET does not support empty key")
-    tableEnv.executeSql("ALTER TABLE MyTable RESET ()")
+    assertThatThrownBy(() => tableEnv.executeSql("ALTER TABLE MyTable RESET ()"))
+      .hasMessageContaining("ALTER TABLE RESET does not support empty key")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -432,12 +436,13 @@ class TableEnvironmentTest {
         .getTable(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.MyTable"))
         .getOptions
     )
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "Unable to create a source for reading table 'default_catalog.default_database.MyTable'.")
-    assertEquals(
-      ResultKind.SUCCESS_WITH_CONTENT,
-      tableEnv.executeSql("explain plan for select * from MyTable where a > 10").getResultKind)
+
+    assertThatThrownBy(
+      () =>
+        tableEnv.executeSql("explain plan for select * from MyTable where a > 10").getResultKind)
+      .hasMessageContaining(
+        "Unable to create a source for reading table 'default_catalog.default_database.MyTable'.")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -951,25 +956,57 @@ class TableEnvironmentTest {
   }
 
   @Test
-  def testAlterTableCompactOnNonManagedTable(): Unit = {
-    val statement =
+  def testAlterTableDropPartitions(): Unit = {
+    val createTableStmt =
       """
-        |CREATE TABLE MyTable (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |) WITH (
-        |  'connector' = 'COLLECTION',
-        |  'is-bounded' = 'false'
+        |CREATE TABLE tbl (
+        |  a INT,
+        |  b BIGINT,
+        |  c DATE
+        |) PARTITIONED BY (b, c)
+        |WITH (
+        |  'connector' = 'COLLECTION'
         |)
-      """.stripMargin
-    tableEnv.executeSql(statement)
+          """.stripMargin
+    tableEnv.executeSql(createTableStmt)
 
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "ALTER TABLE COMPACT operation is not supported for " +
-        "non-managed table `default_catalog`.`default_database`.`MyTable`")
-    tableEnv.executeSql("alter table MyTable compact")
+    val catalog = tableEnv.getCatalog(tableEnv.getCurrentCatalog).get()
+    val spec1 = new CatalogPartitionSpec(Map("b" -> "1000", "c" -> "2020-05-01").asJava)
+    val part1 = new CatalogPartitionImpl(Map("k1" -> "v1").asJava, "")
+    val spec2 = new CatalogPartitionSpec(Map("b" -> "2000", "c" -> "2020-01-01").asJava)
+    val part2 = new CatalogPartitionImpl(Map("k1" -> "v1").asJava, "")
+    val tablePath = new ObjectPath("default_database", "tbl")
+    // create partition
+    catalog.createPartition(tablePath, spec1, part1, false)
+    catalog.createPartition(tablePath, spec2, part2, false)
+
+    // check the partitions
+    assertThat(catalog.listPartitions(tablePath).toString)
+      .isEqualTo(
+        "[CatalogPartitionSpec{{b=1000, c=2020-05-01}}," +
+          " CatalogPartitionSpec{{b=2000, c=2020-01-01}}]")
+
+    // drop the partitions
+    var tableResult =
+      tableEnv.executeSql("alter table tbl drop partition(b='1000', c ='2020-05-01')")
+    assertEquals(ResultKind.SUCCESS, tableResult.getResultKind)
+    assertThat(catalog.listPartitions(tablePath).toString)
+      .isEqualTo("[CatalogPartitionSpec{{b=2000, c=2020-01-01}}]")
+
+    // drop the partition again with if exists
+    tableResult =
+      tableEnv.executeSql("alter table tbl drop if exists partition(b='1000', c='2020-05-01')")
+    assertEquals(ResultKind.SUCCESS, tableResult.getResultKind)
+    assertThat(catalog.listPartitions(tablePath).toString)
+      .isEqualTo("[CatalogPartitionSpec{{b=2000, c=2020-01-01}}]")
+
+    // drop the partition again without if exists,
+    // should throw exception then
+    assertThatThrownBy(
+      () => tableEnv.executeSql("alter table tbl drop partition (b=1000,c='2020-05-01')"))
+      .isInstanceOf(classOf[TableException])
+      .hasMessageContaining("Could not execute ALTER TABLE default_catalog.default_database.tbl" +
+        " DROP PARTITION (b=1000, c=2020-05-01)")
   }
 
   @Test
@@ -1013,61 +1050,33 @@ class TableEnvironmentTest {
   }
 
   @Test
-  def testAlterTableCompactOnManagedTableUnderStreamingMode(): Unit = {
-    val statement =
-      """
-        |CREATE TABLE MyTable (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |)
-      """.stripMargin
-    tableEnv.executeSql(statement)
-
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage("Compact managed table only works under batch mode.")
-    tableEnv.executeSql("alter table MyTable compact")
-  }
-
-  @Test
   def testExecuteSqlWithCreateAlterDropTable(): Unit = {
-    val createTableStmt =
-      """
-        |CREATE TABLE tbl1 (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |) with (
-        |  'connector' = 'COLLECTION',
-        |  'is-bounded' = 'false'
-        |)
-      """.stripMargin
-    val tableResult1 = tableEnv.executeSql(createTableStmt)
-    assertEquals(ResultKind.SUCCESS, tableResult1.getResultKind)
+    createTableForTests()
+
     assertTrue(
       tableEnv
         .getCatalog(tableEnv.getCurrentCatalog)
         .get()
-        .tableExists(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.tbl1")))
+        .tableExists(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.T1")))
 
-    val tableResult2 = tableEnv.executeSql("ALTER TABLE tbl1 SET ('k1' = 'a', 'k2' = 'b')")
+    val tableResult2 = tableEnv.executeSql("ALTER TABLE T1 SET ('k1' = 'a', 'k2' = 'b')")
     assertEquals(ResultKind.SUCCESS, tableResult2.getResultKind)
     assertEquals(
       Map("connector" -> "COLLECTION", "is-bounded" -> "false", "k1" -> "a", "k2" -> "b").asJava,
       tableEnv
         .getCatalog(tableEnv.getCurrentCatalog)
         .get()
-        .getTable(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.tbl1"))
+        .getTable(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.T1"))
         .getOptions
     )
 
-    val tableResult3 = tableEnv.executeSql("DROP TABLE tbl1")
+    val tableResult3 = tableEnv.executeSql("DROP TABLE T1")
     assertEquals(ResultKind.SUCCESS, tableResult3.getResultKind)
     assertFalse(
       tableEnv
         .getCatalog(tableEnv.getCurrentCatalog)
         .get()
-        .tableExists(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.tbl1")))
+        .tableExists(ObjectPath.fromString(s"${tableEnv.getCurrentDatabase}.T1")))
   }
 
   @Test
@@ -1176,7 +1185,7 @@ class TableEnvironmentTest {
     assert(tableEnv.listTables().sameElements(Array.empty[String]))
   }
 
-  @Test(expected = classOf[ValidationException])
+  @Test
   def testExecuteSqlWithDropTemporaryTableTwice(): Unit = {
     val createTableStmt =
       """
@@ -1198,7 +1207,8 @@ class TableEnvironmentTest {
     assert(tableEnv.listTables().sameElements(Array.empty[String]))
 
     // fail the case
-    tableEnv.executeSql("DROP TEMPORARY TABLE tbl1")
+    assertThatThrownBy(() => tableEnv.executeSql("DROP TEMPORARY TABLE tbl1"))
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -1224,7 +1234,7 @@ class TableEnvironmentTest {
     assert(tableEnv.listTables().sameElements(Array.empty[String]))
   }
 
-  @Test(expected = classOf[ValidationException])
+  @Test
   def testDropTemporaryTableWithInvalidPath(): Unit = {
     val createTableStmt =
       """
@@ -1242,7 +1252,9 @@ class TableEnvironmentTest {
     assert(tableEnv.listTables().sameElements(Array[String]("tbl1")))
 
     // fail the case
-    tableEnv.executeSql("DROP TEMPORARY TABLE invalid_catalog.invalid_database.tbl1")
+    assertThatThrownBy(
+      () => tableEnv.executeSql("DROP TEMPORARY TABLE invalid_catalog.invalid_database.tbl1"))
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -1358,32 +1370,20 @@ class TableEnvironmentTest {
       ResolvedSchema.of(Column.physical("database name", DataTypes.STRING())),
       tableResult2.getResolvedSchema)
     checkData(
-      util.Arrays.asList(Row.of("default_database"), Row.of("db1")).iterator(),
+      util.Arrays.asList(Row.of("db1"), Row.of("default_database")).iterator(),
       tableResult2.collect())
   }
 
   @Test
   def testExecuteSqlWithShowTables(): Unit = {
-    val createTableStmt =
-      """
-        |CREATE TABLE tbl1 (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |) with (
-        |  'connector' = 'COLLECTION',
-        |  'is-bounded' = 'false'
-        |)
-      """.stripMargin
-    val tableResult1 = tableEnv.executeSql(createTableStmt)
-    assertEquals(ResultKind.SUCCESS, tableResult1.getResultKind)
+    createTableForTests()
 
     val tableResult2 = tableEnv.executeSql("SHOW TABLES")
     assertEquals(ResultKind.SUCCESS_WITH_CONTENT, tableResult2.getResultKind)
     assertEquals(
       ResolvedSchema.of(Column.physical("table name", DataTypes.STRING())),
       tableResult2.getResolvedSchema)
-    checkData(util.Arrays.asList(Row.of("tbl1")).iterator(), tableResult2.collect())
+    checkData(util.Arrays.asList(Row.of("T1")).iterator(), tableResult2.collect())
   }
 
   @Test
@@ -1430,6 +1430,37 @@ class TableEnvironmentTest {
   }
 
   @Test
+  def testExecuteSqlWithEnhancedShowViews(): Unit = {
+    val createCatalogResult =
+      tableEnv.executeSql("CREATE CATALOG catalog1 WITH('type'='generic_in_memory')")
+    assertEquals(ResultKind.SUCCESS, createCatalogResult.getResultKind)
+
+    val createDbResult = tableEnv.executeSql("CREATE database catalog1.db1")
+    assertEquals(ResultKind.SUCCESS, createDbResult.getResultKind)
+
+    val createTableStmt =
+      """
+        |CREATE VIEW catalog1.db1.view1 AS SELECT 1, 'abc'
+      """.stripMargin
+    val tableResult1 = tableEnv.executeSql(createTableStmt)
+    assertEquals(ResultKind.SUCCESS, tableResult1.getResultKind)
+
+    val createTableStmt2 =
+      """
+        |CREATE VIEW catalog1.db1.view2 AS SELECT 123
+      """.stripMargin
+    val tableResult2 = tableEnv.executeSql(createTableStmt2)
+    assertEquals(ResultKind.SUCCESS, tableResult2.getResultKind)
+
+    val tableResult3 = tableEnv.executeSql("SHOW VIEWS FROM catalog1.db1 like '%w1'")
+    assertEquals(ResultKind.SUCCESS_WITH_CONTENT, tableResult3.getResultKind)
+    assertEquals(
+      ResolvedSchema.of(Column.physical("view name", DataTypes.STRING())),
+      tableResult3.getResolvedSchema)
+    checkData(util.Arrays.asList(Row.of("view1")).iterator(), tableResult3.collect())
+  }
+
+  @Test
   def testExecuteSqlWithShowFunctions(): Unit = {
     val tableResult = tableEnv.executeSql("SHOW FUNCTIONS")
     assertEquals(ResultKind.SUCCESS_WITH_CONTENT, tableResult.getResultKind)
@@ -1464,10 +1495,11 @@ class TableEnvironmentTest {
         |  'type' = 'dummy'
         |)
       """.stripMargin
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "Option 'type' = 'dummy' is not supported since module name is used to find module")
-    tableEnv.executeSql(statement)
+
+    assertThatThrownBy(() => tableEnv.executeSql(statement))
+      .hasMessageContaining(
+        "Option 'type' = 'dummy' is not supported since module name is used to find module")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -1489,11 +1521,10 @@ class TableEnvironmentTest {
         |  'dummy-version' = '2'
         |)
       """.stripMargin
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "Could not execute LOAD MODULE `dummy` WITH ('dummy-version' = '2')." +
+    assertThatThrownBy(() => tableEnv.executeSql(statement2))
+      .hasMessageContaining("Could not execute LOAD MODULE `dummy` WITH ('dummy-version' = '2')." +
         " A module with name 'dummy' already exists")
-    tableEnv.executeSql(statement2)
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -1533,11 +1564,10 @@ class TableEnvironmentTest {
     checkListModules("core")
     checkListFullModules(("core", true))
 
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "Could not execute UNLOAD MODULE dummy." +
+    assertThatThrownBy(() => tableEnv.executeSql("UNLOAD MODULE dummy"))
+      .hasMessageContaining("Could not execute UNLOAD MODULE dummy." +
         " No module with name 'dummy' exists")
-    tableEnv.executeSql("UNLOAD MODULE dummy")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -1569,20 +1599,18 @@ class TableEnvironmentTest {
 
   @Test
   def testExecuteSqlWithUseUnloadedModules(): Unit = {
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "Could not execute USE MODULES: [core, dummy]. " +
+    assertThatThrownBy(() => tableEnv.executeSql("USE MODULES core, dummy"))
+      .hasMessageContaining("Could not execute USE MODULES: [core, dummy]. " +
         "No module with name 'dummy' exists")
-    tableEnv.executeSql("USE MODULES core, dummy")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
   def testExecuteSqlWithUseDuplicateModuleNames(): Unit = {
-    expectedException.expect(classOf[ValidationException])
-    expectedException.expectMessage(
-      "Could not execute USE MODULES: [core, core]. " +
+    assertThatThrownBy(() => tableEnv.executeSql("USE MODULES core, core"))
+      .hasMessageContaining("Could not execute USE MODULES: [core, core]. " +
         "Module 'core' appears more than once")
-    tableEnv.executeSql("USE MODULES core, core")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
@@ -1604,27 +1632,10 @@ class TableEnvironmentTest {
   }
 
   @Test
-  def testLegacyModule(): Unit = {
-    tableEnv.executeSql("LOAD MODULE LegacyModule")
-    validateShowModules(("core", true), ("LegacyModule", true))
-  }
-
-  @Test
   def testExecuteSqlWithCreateDropView(): Unit = {
-    val createTableStmt =
-      """
-        |CREATE TABLE tbl1 (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |) with (
-        |  'connector' = 'COLLECTION',
-        |  'is-bounded' = 'false'
-        |)
-      """.stripMargin
-    tableEnv.executeSql(createTableStmt)
+    createTableForTests()
 
-    val viewResult1 = tableEnv.executeSql("CREATE VIEW IF NOT EXISTS v1 AS SELECT * FROM tbl1")
+    val viewResult1 = tableEnv.executeSql("CREATE VIEW IF NOT EXISTS v1 AS SELECT * FROM T1")
     assertEquals(ResultKind.SUCCESS, viewResult1.getResultKind)
     assertTrue(
       tableEnv
@@ -1643,36 +1654,20 @@ class TableEnvironmentTest {
 
   @Test
   def testExecuteSqlWithCreateDropTemporaryView(): Unit = {
-    val createTableStmt =
-      """
-        |CREATE TABLE tbl1 (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |) with (
-        |  'connector' = 'COLLECTION',
-        |  'is-bounded' = 'false'
-        |)
-      """.stripMargin
-    tableEnv.executeSql(createTableStmt)
+    createTableForTests()
 
     val viewResult1 =
-      tableEnv.executeSql("CREATE TEMPORARY VIEW IF NOT EXISTS v1 AS SELECT * FROM tbl1")
+      tableEnv.executeSql("CREATE TEMPORARY VIEW IF NOT EXISTS v1 AS SELECT * FROM T1")
     assertEquals(ResultKind.SUCCESS, viewResult1.getResultKind)
-    assert(tableEnv.listTables().sameElements(Array[String]("tbl1", "v1")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "v1")))
 
     val viewResult2 = tableEnv.executeSql("DROP TEMPORARY VIEW IF EXISTS v1")
     assertEquals(ResultKind.SUCCESS, viewResult2.getResultKind)
-    assert(tableEnv.listTables().sameElements(Array[String]("tbl1")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
   }
 
   @Test
   def testCreateViewWithWrongFieldList(): Unit = {
-    thrown.expect(classOf[ValidationException])
-    thrown.expectMessage(
-      "VIEW definition and input fields not match:\n" +
-        "\tDef fields: [d].\n" +
-        "\tInput fields: [a, b, c].")
     val sourceDDL =
       """
         |CREATE TABLE T1(
@@ -1700,16 +1695,21 @@ class TableEnvironmentTest {
         |CREATE VIEW IF NOT EXISTS T3(d) AS SELECT * FROM T1
       """.stripMargin
 
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(sinkDDL)
-    tableEnv.executeSql(viewDDL)
+    assertThatThrownBy(
+      () => {
+        tableEnv.executeSql(sourceDDL)
+        tableEnv.executeSql(sinkDDL)
+        tableEnv.executeSql(viewDDL)
+      })
+      .hasMessageContaining(
+        "VIEW definition and input fields not match:\n" +
+          "\tDef fields: [d].\n" +
+          "\tInput fields: [a, b, c].")
+      .isInstanceOf[ValidationException]
   }
 
   @Test
   def testCreateViewTwice(): Unit = {
-    thrown.expect(classOf[ValidationException])
-    thrown.expectMessage(
-      "Could not execute CreateTable in path `default_catalog`.`default_database`.`T3`")
     val sourceDDL =
       """
         |CREATE TABLE T1(
@@ -1745,186 +1745,158 @@ class TableEnvironmentTest {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(viewWith3ColumnDDL)
-    tableEnv.executeSql(viewWith2ColumnDDL) // fail the case
+
+    assertThatThrownBy(() => tableEnv.executeSql(viewWith2ColumnDDL))
+      .hasMessageContaining(
+        "Could not execute CreateTable in path `default_catalog`.`default_database`.`T3`")
+      .isInstanceOf[ValidationException]
   }
 
-  @Test
-  def testDropViewWithFullPath(): Unit = {
-    val sourceDDL =
-      """
-        |CREATE TABLE T1(
-        |  a int,
-        |  b varchar,
-        |  c int
-        |) with (
-        |  'connector' = 'COLLECTION'
-        |)
-      """.stripMargin
-
-    val view1DDL =
-      """
-        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
-      """.stripMargin
-
-    val view2DDL =
-      """
-        |CREATE VIEW T3(x, y, z) AS SELECT a, b, c FROM T1
-      """.stripMargin
-
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(view1DDL)
-    tableEnv.executeSql(view2DDL)
+  @ParameterizedTest
+  @ValueSource(booleans = Array[Boolean](true, false))
+  def testDropViewWithFullPath(isSql: Boolean): Unit = {
+    createViewsForDropTests()
 
     assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
 
-    tableEnv.executeSql("DROP VIEW default_catalog.default_database.T2")
+    dropView("default_catalog.default_database.T2", isSql)
     assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
 
-    tableEnv.executeSql("DROP VIEW default_catalog.default_database.T3")
+    dropView("default_catalog.default_database.T3", isSql)
     assert(tableEnv.listTables().sameElements(Array[String]("T1")))
   }
 
-  @Test
-  def testDropViewWithPartialPath(): Unit = {
-    val sourceDDL =
-      """
-        |CREATE TABLE T1(
-        |  a int,
-        |  b varchar,
-        |  c int
-        |) with (
-        |  'connector' = 'COLLECTION'
-        |)
-      """.stripMargin
-
-    val view1DDL =
-      """
-        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
-      """.stripMargin
-
-    val view2DDL =
-      """
-        |CREATE VIEW T3(x, y, z) AS SELECT a, b, c FROM T1
-      """.stripMargin
-
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(view1DDL)
-    tableEnv.executeSql(view2DDL)
+  @ParameterizedTest
+  @ValueSource(booleans = Array[Boolean](true, false))
+  def testDropViewWithPartialPath(isSql: Boolean): Unit = {
+    createViewsForDropTests()
 
     assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
 
-    tableEnv.executeSql("DROP VIEW T2")
+    dropView("T2", isSql)
     assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
 
-    tableEnv.executeSql("DROP VIEW default_database.T3")
+    dropView("T3", isSql)
     assert(tableEnv.listTables().sameElements(Array[String]("T1")))
   }
 
   @Test
   def testDropViewIfExistsTwice(): Unit = {
-    val sourceDDL =
-      """
-        |CREATE TABLE T1(
-        |  a int,
-        |  b varchar,
-        |  c int
-        |) with (
-        |  'connector' = 'COLLECTION'
-        |)
-      """.stripMargin
+    createViewsForDropTests()
 
-    val viewDDL =
-      """
-        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
-      """.stripMargin
-
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(viewDDL)
-
-    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
 
     tableEnv.executeSql("DROP VIEW IF EXISTS default_catalog.default_database.T2")
-    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
 
     tableEnv.executeSql("DROP VIEW IF EXISTS default_catalog.default_database.T2")
-    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
   }
 
-  @Test(expected = classOf[ValidationException])
+  @Test
   def testDropViewTwice(): Unit = {
-    val sourceDDL =
-      """
-        |CREATE TABLE T1(
-        |  a int,
-        |  b varchar,
-        |  c int
-        |) with (
-        |  'connector' = 'COLLECTION'
-        |)
-      """.stripMargin
+    createViewsForDropTests()
 
-    val viewDDL =
-      """
-        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
-      """.stripMargin
-
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(viewDDL)
-
-    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
 
     tableEnv.executeSql("DROP VIEW default_catalog.default_database.T2")
-    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
 
-    tableEnv.executeSql("DROP VIEW default_catalog.default_database.T2")
+    assertThatThrownBy(() => tableEnv.executeSql("DROP VIEW default_catalog.default_database.T2"))
+      .isInstanceOf(classOf[ValidationException])
   }
 
-  @Test(expected = classOf[ValidationException])
-  def testDropViewWithInvalidPath(): Unit = {
-    val sourceDDL =
-      """
-        |CREATE TABLE T1(
-        |  a int,
-        |  b varchar,
-        |  c int
-        |) with (
-        |  'connector' = 'COLLECTION'
-        |)
-      """.stripMargin
+  @Test
+  def testDropView(): Unit = {
+    createViewsForDropTests()
 
-    val viewDDL =
-      """
-        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
-      """.stripMargin
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(viewDDL)
-    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
+
+    assertTrue(tableEnv.dropView("default_catalog.default_database.T2"))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
+
+    assertFalse(tableEnv.dropView("default_catalog.default_database.T2"))
+    assertFalse(tableEnv.dropView("invalid.default_database.T2"))
+    assertFalse(tableEnv.dropView("default_catalog.invalid.T2"))
+    assertFalse(tableEnv.dropView("default_catalog.default_database.invalid"))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
+
+    tableEnv.createTemporaryView("T3", tableEnv.sqlQuery("SELECT 123"))
+
+    assertThatThrownBy(() => tableEnv.dropView("T3"))
+      .hasMessageContaining(
+        "Temporary view with identifier '`default_catalog`.`default_database`.`T3`' exists. " +
+          "Drop it first before removing the permanent view.")
+      .isInstanceOf[ValidationException]
+
+    tableEnv.dropTemporaryView("T3")
+
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T3")))
+    // Now can drop permanent view
+    tableEnv.dropView("T3")
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+  }
+
+  @Test
+  def testDropTable(): Unit = {
+    createTableForTests()
+
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+
+    assertFalse(tableEnv.dropTable("default_catalog.default_database.T2"))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+
+    assertThatThrownBy(() => tableEnv.dropTable("default_catalog.default_database.T2", false))
+      .hasMessageContaining(
+        "Table with identifier 'default_catalog.default_database.T2' does not exist.")
+      .isInstanceOf[ValidationException]
+
+    assertFalse(tableEnv.dropTable("default_catalog.default_database.T2"))
+    assertFalse(tableEnv.dropTable("invalid.default_database.T2"))
+    assertFalse(tableEnv.dropTable("default_catalog.invalid.T2"))
+    assertFalse(tableEnv.dropTable("default_catalog.default_database.invalid"))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+
+    assertTrue(tableEnv.dropTable("default_catalog.default_database.T1"))
+    assert(tableEnv.listTables().sameElements(Array[String]()))
+    createTableForTests()
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+
+    tableEnv.createTemporaryTable(
+      "T1",
+      TableDescriptor
+        .forConnector("values")
+        .schema(Schema.newBuilder().column("col1", DataTypes.INT()).build())
+        .build())
+    assertThatThrownBy(() => tableEnv.dropTable("T1"))
+      .hasMessageContaining(
+        "Temporary table with identifier '`default_catalog`.`default_database`.`T1`' exists. " +
+          "Drop it first before removing the permanent table.")
+      .isInstanceOf[ValidationException]
+
+    tableEnv.dropTemporaryTable("T1")
+
+    assert(tableEnv.listTables().sameElements(Array[String]("T1")))
+    // Now can drop permanent table
+    tableEnv.dropTable("T1")
+    assert(tableEnv.listTables().sameElements(Array[String]()))
+  }
+
+  @Test
+  def testDropViewWithInvalidPath(): Unit = {
+    createViewsForDropTests()
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
     // failed since 'default_catalog1.default_database1.T2' is invalid path
-    tableEnv.executeSql("DROP VIEW default_catalog1.default_database1.T2")
+    assertThatThrownBy(() => tableEnv.executeSql("DROP VIEW default_catalog1.default_database1.T2"))
+      .isInstanceOf[ValidationException]
   }
 
   @Test
   def testDropViewWithInvalidPathIfExists(): Unit = {
-    val sourceDDL =
-      """
-        |CREATE TABLE T1(
-        |  a int,
-        |  b varchar,
-        |  c int
-        |) with (
-        |  'connector' = 'COLLECTION'
-        |)
-      """.stripMargin
-
-    val viewDDL =
-      """
-        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
-      """.stripMargin
-    tableEnv.executeSql(sourceDDL)
-    tableEnv.executeSql(viewDDL)
-    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2")))
+    createViewsForDropTests()
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
     tableEnv.executeSql("DROP VIEW IF EXISTS default_catalog1.default_database1.T2")
-    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2")))
+    assert(tableEnv.listTables().sameElements(Array[String]("T1", "T2", "T3")))
   }
 
   @Test
@@ -1957,7 +1929,7 @@ class TableEnvironmentTest {
     assert(tableEnv.listTemporaryViews().sameElements(Array[String]()))
   }
 
-  @Test(expected = classOf[ValidationException])
+  @Test
   def testDropTemporaryViewTwice(): Unit = {
     val sourceDDL =
       """
@@ -1986,26 +1958,16 @@ class TableEnvironmentTest {
     assert(tableEnv.listTemporaryViews().sameElements(Array[String]()))
 
     // throws ValidationException since default_catalog.default_database.T2 is not exists
-    tableEnv.executeSql("DROP TEMPORARY VIEW default_catalog.default_database.T2")
+    assertThatThrownBy(
+      () => tableEnv.executeSql("DROP TEMPORARY VIEW default_catalog.default_database.T2"))
+      .isInstanceOf[ValidationException]
   }
 
   @Test
   def testExecuteSqlWithShowViews(): Unit = {
-    val createTableStmt =
-      """
-        |CREATE TABLE tbl1 (
-        |  a bigint,
-        |  b int,
-        |  c varchar
-        |) with (
-        |  'connector' = 'COLLECTION',
-        |  'is-bounded' = 'false'
-        |)
-      """.stripMargin
-    val tableResult1 = tableEnv.executeSql(createTableStmt)
-    assertEquals(ResultKind.SUCCESS, tableResult1.getResultKind)
+    createTableForTests()
 
-    val tableResult2 = tableEnv.executeSql("CREATE VIEW view1 AS SELECT * FROM tbl1")
+    val tableResult2 = tableEnv.executeSql("CREATE VIEW view1 AS SELECT * FROM T1")
     assertEquals(ResultKind.SUCCESS, tableResult2.getResultKind)
 
     val tableResult3 = tableEnv.executeSql("SHOW VIEWS")
@@ -2015,7 +1977,7 @@ class TableEnvironmentTest {
       tableResult3.getResolvedSchema)
     checkData(util.Arrays.asList(Row.of("view1")).iterator(), tableResult3.collect())
 
-    val tableResult4 = tableEnv.executeSql("CREATE TEMPORARY VIEW view2 AS SELECT * FROM tbl1")
+    val tableResult4 = tableEnv.executeSql("CREATE TEMPORARY VIEW view2 AS SELECT * FROM T1")
     assertEquals(ResultKind.SUCCESS, tableResult4.getResultKind)
 
     // SHOW VIEWS also shows temporary views
@@ -2703,6 +2665,179 @@ class TableEnvironmentTest {
           "Please instantiate a new TableEnvironment if necessary.")
   }
 
+  @Test
+  def testAddPartitions(): Unit = {
+    val createTableStmt =
+      """
+        |CREATE TABLE tbl (
+        |  a INT,
+        |  b BIGINT,
+        |  c DATE
+        |) PARTITIONED BY (b, c)
+        |WITH (
+        |  'connector' = 'COLLECTION'
+        |)
+      """.stripMargin
+    tableEnv.executeSql(createTableStmt)
+
+    // test add partition
+    var tableResult = tableEnv.executeSql(
+      "alter table tbl add partition " +
+        "(b=1000,c='2020-05-01') partition (b=2000,c='2020-01-01') with ('k'='v')")
+    assertEquals(ResultKind.SUCCESS, tableResult.getResultKind)
+
+    val spec1 = new CatalogPartitionSpec(Map("b" -> "1000", "c" -> "2020-05-01").asJava)
+    val spec2 = new CatalogPartitionSpec(Map("b" -> "2000", "c" -> "2020-01-01").asJava)
+
+    val catalog = tableEnv.getCatalog(tableEnv.getCurrentCatalog).get()
+
+    val tablePath = new ObjectPath("default_database", "tbl")
+    val actual = catalog.listPartitions(tablePath)
+    // assert partition spec
+    assertEquals(List(spec1, spec2).asJava, actual)
+
+    val part1 = catalog.getPartition(tablePath, spec1)
+    val part2 = catalog.getPartition(tablePath, spec2)
+    // assert partition properties
+    assertEquals(Collections.emptyMap(), part1.getProperties)
+    assertEquals(Collections.singletonMap("k", "v"), part2.getProperties)
+
+    // add existed partition with if not exists
+    tableResult =
+      tableEnv.executeSql("alter table tbl add if not exists partition (b=1000,c='2020-05-01')")
+    assertEquals(ResultKind.SUCCESS, tableResult.getResultKind)
+
+    // add existed partition without if not exists
+    assertThatThrownBy(
+      () => tableEnv.executeSql("alter table tbl add partition (b=1000,c='2020-05-01')"))
+      .isInstanceOf(classOf[TableException])
+      .hasMessageContaining("Could not execute ALTER TABLE default_catalog.default_database.tbl" +
+        " ADD PARTITION (b=1000, c=2020-05-01)")
+
+  }
+
+  @Test
+  def testShowPartitions(): Unit = {
+    val createTableStmt =
+      """
+        |CREATE TABLE tbl (
+        |  a INT,
+        |  b BIGINT,
+        |  c DATE
+        |) PARTITIONED BY (b, c)
+        |WITH (
+        |  'connector' = 'COLLECTION'
+        |)
+          """.stripMargin
+    tableEnv.executeSql(createTableStmt)
+
+    // partitions
+    val catalog = tableEnv.getCatalog(tableEnv.getCurrentCatalog).get()
+    val spec1 = new CatalogPartitionSpec(Map("b" -> "1000", "c" -> "2020-05-01").asJava)
+    val part1 = new CatalogPartitionImpl(Map("k1" -> "v1").asJava, "")
+    val spec2 = new CatalogPartitionSpec(Map("b" -> "2000", "c" -> "2020-01-01").asJava)
+    val part2 = new CatalogPartitionImpl(Map("k1" -> "v1").asJava, "")
+    val spec3 = new CatalogPartitionSpec(Map("b" -> "2000", "c" -> "2020-05-01").asJava)
+    val part3 = new CatalogPartitionImpl(Map("k1" -> "v1").asJava, "")
+
+    val tablePath = new ObjectPath("default_database", "tbl")
+    // create partition
+    catalog.createPartition(tablePath, spec1, part1, false)
+    catalog.createPartition(tablePath, spec2, part2, false)
+    catalog.createPartition(tablePath, spec3, part3, false)
+
+    // test show all partitions
+    var tableResult =
+      tableEnv.executeSql("show partitions tbl")
+
+    var expectedResult = util.Arrays.asList(
+      Row.of("b=1000/c=2020-05-01"),
+      Row.of("b=2000/c=2020-01-01"),
+      Row.of("b=2000/c=2020-05-01")
+    )
+
+    checkData(expectedResult.iterator(), tableResult.collect())
+
+    // test show partitions with partition spec
+    tableResult = tableEnv.executeSql("show partitions tbl partition (b=2000)")
+    expectedResult = util.Arrays.asList(
+      Row.of("b=2000/c=2020-01-01"),
+      Row.of("b=2000/c=2020-05-01")
+    )
+    checkData(expectedResult.iterator(), tableResult.collect())
+  }
+
+  @Test
+  def testShowColumnsWithLike(): Unit = {
+    val createTableStmt =
+      """
+        |CREATE TABLE TestTb1 (
+        |  abc bigint,
+        |  b int,
+        |  c varchar
+        |) with (
+        |  'connector' = 'COLLECTION',
+        |  'is-bounded' = 'false'
+        |)
+    """.stripMargin
+    tableEnv.executeSql(createTableStmt)
+
+    var sql = "SHOW COLUMNS from TestTb1 LIKE 'abc'"
+    var tableResult = tableEnv.executeSql(sql)
+
+    val expectedResult = util.Arrays.asList(
+      Row.of("abc", "BIGINT", Boolean.box(true), null, null, null)
+    )
+
+    checkData(expectedResult.iterator(), tableResult.collect())
+
+    sql = "SHOW COLUMNS from TestTb1 LIKE 'a.c'"
+    tableResult = tableEnv.executeSql(sql)
+
+    checkData(Collections.emptyList().iterator(), tableResult.collect());
+  }
+
+  private def dropView(viewName: String, isSql: Boolean): Unit = {
+    if (isSql) {
+      tableEnv.executeSql("DROP VIEW " + viewName)
+    } else {
+      tableEnv.dropView(viewName)
+    }
+  }
+
+  private def createViewsForDropTests(): Unit = {
+    createTableForTests()
+    val viewDdls = Array[String](
+      """
+        |CREATE VIEW T2(d, e, f) AS SELECT a, b, c FROM T1
+      """.stripMargin,
+      """
+        |CREATE VIEW T3(x, y, z) AS SELECT a, b, c FROM T1
+      """.stripMargin
+    )
+
+    for (viewSql <- viewDdls) {
+      val view = tableEnv.executeSql(viewSql)
+      assertEquals(ResultKind.SUCCESS, view.getResultKind)
+    }
+  }
+
+  private def createTableForTests(): Unit = {
+    val createTableStmt =
+      """
+        |CREATE TABLE T1 (
+        |  a bigint,
+        |  b int,
+        |  c varchar
+        |) with (
+        |  'connector' = 'COLLECTION',
+        |  'is-bounded' = 'false'
+        |)
+      """.stripMargin
+    val tableResult = tableEnv.executeSql(createTableStmt)
+    assertEquals(ResultKind.SUCCESS, tableResult.getResultKind)
+  }
+
   private def checkData(expected: util.Iterator[Row], actual: util.Iterator[Row]): Unit = {
     while (expected.hasNext && actual.hasNext) {
       assertEquals(expected.next(), actual.next())
@@ -2792,9 +2927,11 @@ class TableEnvironmentTest {
     with TemporaryOperationListener {
 
     val tableComment: String = "listener_comment"
+    val modelComment: String = "listener_comment"
     val funcClzName: String = classOf[TestGenericUDF].getName
 
     var numTempTable = 0
+    var numTempModel = 0
     var numTempFunc = 0
 
     override def onCreateTemporaryTable(
@@ -2802,19 +2939,33 @@ class TableEnvironmentTest {
         table: CatalogBaseTable): CatalogBaseTable = {
       numTempTable += 1
       if (table.isInstanceOf[CatalogTable]) {
-        new CatalogTableImpl(table.getSchema, table.getOptions, tableComment)
+        CatalogTable
+          .newBuilder()
+          .schema(table.getUnresolvedSchema)
+          .comment(tableComment)
+          .options(table.getOptions)
+          .build()
       } else {
         val view = table.asInstanceOf[CatalogView]
-        new CatalogViewImpl(
+        CatalogView.of(
+          view.getUnresolvedSchema,
+          tableComment,
           view.getOriginalQuery,
           view.getExpandedQuery,
-          view.getSchema,
-          view.getOptions,
-          tableComment)
+          view.getOptions)
       }
     }
 
+    override def onCreateTemporaryModel(
+        modelPath: ObjectPath,
+        model: CatalogModel): CatalogModel = {
+      numTempModel += 1
+      CatalogModel.of(model.getInputSchema, model.getOutputSchema, model.getOptions, modelComment)
+    }
+
     override def onDropTemporaryTable(tablePath: ObjectPath): Unit = numTempTable -= 1
+
+    override def onDropTemporaryModel(modelPath: ObjectPath): Unit = numTempModel -= 1
 
     override def onCreateTemporaryFunction(
         functionPath: ObjectPath,

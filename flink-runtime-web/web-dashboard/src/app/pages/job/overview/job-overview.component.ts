@@ -34,8 +34,9 @@ import { DagreComponent } from '@flink-runtime-web/components/dagre/dagre.compon
 import { ResizeComponent } from '@flink-runtime-web/components/resize/resize.component';
 import { NodesItemCorrect, NodesItemLink } from '@flink-runtime-web/interfaces';
 import { JobOverviewListComponent } from '@flink-runtime-web/pages/job/overview/list/job-overview-list.component';
-import { MetricsService } from '@flink-runtime-web/services';
+import { JobService, MetricsService } from '@flink-runtime-web/services';
 import { NzAlertModule } from 'ng-zorro-antd/alert';
+import { NzNotificationService } from 'ng-zorro-antd/notification';
 
 import { JobLocalService } from '../job-local.service';
 
@@ -50,6 +51,10 @@ import { JobLocalService } from '../job-local.service';
 export class JobOverviewComponent implements OnInit, OnDestroy {
   public nodes: NodesItemCorrect[] = [];
   public links: NodesItemLink[] = [];
+  public streamNodes: NodesItemCorrect[] = [];
+  public streamLinks: NodesItemLink[] = [];
+  public pendingNodes: NodesItemCorrect[] = [];
+  public pendingLinks: NodesItemLink[] = [];
   public selectedNode: NodesItemCorrect | null;
   public top = 500;
   public jobId: string;
@@ -65,6 +70,8 @@ export class JobOverviewComponent implements OnInit, OnDestroy {
     public readonly elementRef: ElementRef,
     private readonly metricService: MetricsService,
     private readonly jobLocalService: JobLocalService,
+    private readonly jobService: JobService,
+    private readonly notificationService: NzNotificationService,
     private readonly cdr: ChangeDetectorRef
   ) {}
 
@@ -76,11 +83,14 @@ export class JobOverviewComponent implements OnInit, OnDestroy {
         takeUntil(this.destroy$)
       )
       .subscribe(data => {
-        if (this.jobId !== data.plan.jid || this.nodes.length === 0) {
-          this.nodes = data.plan.nodes;
-          this.links = data.plan.links;
+        if (this.jobId !== data.plan.jid || data.plan.nodes.length !== this.nodes.length) {
           this.jobId = data.plan.jid;
-          this.dagreComponent.flush(this.nodes, this.links, true).then();
+          this.nodes = data.plan.nodes;
+          this.streamNodes = data.plan.streamNodes;
+          this.streamLinks = data.plan.streamLinks;
+          this.links = data.plan.links;
+          this.updatePendingInfo();
+          this.refreshGraph(this.dagreComponent.showPendingOperators);
           this.refreshNodesWithMetrics();
         } else {
           this.nodes = data.plan.nodes;
@@ -115,6 +125,15 @@ export class JobOverviewComponent implements OnInit, OnDestroy {
     }
   }
 
+  public onRescale(desiredParallelism: Map<string, number>): void {
+    this.jobService.changeDesiredParallelism(this.jobId, desiredParallelism).subscribe(() => {
+      this.notificationService.success(
+        'Rescaling operation.',
+        'Job resources requirements have been updated. Job will now try to rescale.'
+      );
+    });
+  }
+
   public onResizeEnd(): void {
     if (!this.selectedNode) {
       this.dagreComponent.moveToCenter();
@@ -125,7 +144,7 @@ export class JobOverviewComponent implements OnInit, OnDestroy {
   }
 
   public refreshNodesWithMetrics(): void {
-    this.mergeWithBackPressure(this.nodes)
+    this.mergeWithBackPressureAndSkew(this.nodes)
       .pipe(
         mergeMap(nodes => this.mergeWithWatermarks(nodes)),
         takeUntil(this.destroy$)
@@ -138,17 +157,22 @@ export class JobOverviewComponent implements OnInit, OnDestroy {
       });
   }
 
-  private mergeWithBackPressure(nodes: NodesItemCorrect[]): Observable<NodesItemCorrect[]> {
+  private mergeWithBackPressureAndSkew(nodes: NodesItemCorrect[]): Observable<NodesItemCorrect[]> {
     return forkJoin(
       nodes.map(node => {
         return this.metricService
-          .loadAggregatedMetrics(this.jobId, node.id, ['backPressuredTimeMsPerSecond', 'busyTimeMsPerSecond'])
+          .loadMetricsWithAllAggregates(this.jobId, node.id, [
+            'backPressuredTimeMsPerSecond',
+            'busyTimeMsPerSecond',
+            'numRecordsInPerSecond'
+          ])
           .pipe(
             map(result => {
               return {
                 ...node,
-                backPressuredPercentage: Math.min(Math.round(result.backPressuredTimeMsPerSecond / 10), 100),
-                busyPercentage: Math.min(Math.round(result.busyTimeMsPerSecond / 10), 100)
+                backPressuredPercentage: Math.min(Math.round(result.backPressuredTimeMsPerSecond.max / 10), 100),
+                busyPercentage: Math.min(Math.round(result.busyTimeMsPerSecond.max / 10), 100),
+                dataSkewPercentage: result.numRecordsInPerSecond.skew
               };
             })
           );
@@ -166,5 +190,40 @@ export class JobOverviewComponent implements OnInit, OnDestroy {
         );
       })
     ).pipe(catchError(() => of(nodes)));
+  }
+
+  refreshGraph(showPendingOperators: boolean): void {
+    if (showPendingOperators) {
+      this.dagreComponent
+        .flush([...this.nodes, ...this.pendingNodes], [...this.links, ...this.pendingLinks], true)
+        .then();
+    } else {
+      this.dagreComponent.flush(this.nodes, this.links, true).then();
+    }
+  }
+
+  private updatePendingInfo(): void {
+    this.pendingNodes = this.streamNodes.filter(node => !node?.job_vertex_id);
+    this.pendingLinks = this.getPendingLinks(this.pendingNodes);
+  }
+
+  private getPendingLinks(pendingNodes: NodesItemCorrect[]): NodesItemLink[] {
+    const pendingLinks: NodesItemLink[] = [];
+    const pendingNodesSet = new Set(pendingNodes.map(node => node.id));
+    const nodeIdMapper = new Map(this.streamNodes.map(node => [node.id, node?.job_vertex_id]));
+    this.streamLinks
+      .filter(link => pendingNodesSet.has(link.source) || pendingNodesSet.has(link.target))
+      .forEach(link => {
+        const source = nodeIdMapper.get(link.source) ?? link.source;
+        const target = nodeIdMapper.get(link.target) ?? link.target;
+        pendingLinks.push({
+          ...link,
+          id: `${source}-${target}`,
+          source,
+          target,
+          pending: true
+        });
+      });
+    return pendingLinks;
   }
 }

@@ -77,6 +77,7 @@ import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexCallBinding;
 import org.apache.calcite.rex.RexCorrelVariable;
+import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexExecutor;
 import org.apache.calcite.rex.RexFieldCollation;
 import org.apache.calcite.rex.RexInputRef;
@@ -105,6 +106,7 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.type.TableFunctionReturnTypeInference;
 import org.apache.calcite.sql.validate.SqlValidatorUtil;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
+import org.apache.calcite.util.DateString;
 import org.apache.calcite.util.Holder;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.ImmutableIntList;
@@ -138,6 +140,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
@@ -154,7 +157,7 @@ import static org.apache.calcite.util.Static.RESOURCE;
  * <p>FLINK modifications are at lines
  *
  * <ol>
- *   <li>Should be removed after fix of FLINK-29804: Lines 2927 ~ 2930
+ *   <li>Should be removed after fix of FLINK-29804: Lines 3000 ~ 3003
  * </ol>
  */
 @Value.Enclosing
@@ -162,7 +165,7 @@ public class RelBuilder {
     protected final RelOptCluster cluster;
     protected final @Nullable RelOptSchema relOptSchema;
     private final Deque<Frame> stack = new ArrayDeque<>();
-    private final RexSimplify simplifier;
+    private RexSimplify simplifier;
     private final Config config;
     private final RelOptTable.ViewExpander viewExpander;
     private RelFactories.Struct struct;
@@ -428,6 +431,25 @@ public class RelBuilder {
         }
     }
 
+    /** Performs an action with a temporary simplifier. */
+    public <E> E withSimplifier(
+            BiFunction<RelBuilder, RexSimplify, RexSimplify> simplifierTransform,
+            Function<RelBuilder, E> fn) {
+        final RexSimplify previousSimplifier = this.simplifier;
+        try {
+            this.simplifier = simplifierTransform.apply(this, previousSimplifier);
+            return fn.apply(this);
+        } finally {
+            this.simplifier = previousSimplifier;
+        }
+    }
+
+    /** Performs an action using predicates of the {@link #peek() current node} to simplify. */
+    public <E> E withPredicates(RelMetadataQuery mq, Function<RelBuilder, E> fn) {
+        final RelOptPredicateList predicates = mq.getPulledUpPredicates(peek());
+        return withSimplifier((r, s) -> s.withPredicates(predicates), fn);
+    }
+
     // Methods that return scalar expressions
 
     /** Creates a literal (constant expression). */
@@ -449,6 +471,8 @@ public class RelBuilder {
         } else if (value instanceof Enum) {
             return rexBuilder.makeLiteral(
                     value, getTypeFactory().createSqlType(SqlTypeName.SYMBOL));
+        } else if (value instanceof DateString) {
+            return rexBuilder.makeDateLiteral((DateString) value);
         } else {
             throw new IllegalArgumentException(
                     "cannot convert " + value + " (" + value.getClass() + ") to a constant");
@@ -1161,7 +1185,7 @@ public class RelBuilder {
      *
      * @see #project
      */
-    public RexNode alias(RexNode expr, @Nullable String alias) {
+    public RexNode alias(RexNode expr, String alias) {
         final RexNode aliasLiteral = literal(alias);
         switch (expr.getKind()) {
             case AS:
@@ -1171,7 +1195,7 @@ public class RelBuilder {
                     return expr;
                 }
                 expr = call.operands.get(0);
-                // strip current (incorrect) alias, and fall through
+            // strip current (incorrect) alias, and fall through
             default:
                 return call(SqlStdOperatorTable.AS, expr, aliasLiteral);
         }
@@ -1339,7 +1363,9 @@ public class RelBuilder {
     }
 
     // CHECKSTYLE: IGNORE 1
-    /** @deprecated Use {@link #groupKey(ImmutableBitSet, Iterable)}. */
+    /**
+     * @deprecated Use {@link #groupKey(ImmutableBitSet, Iterable)}.
+     */
     @Deprecated // to be removed before 2.0
     public GroupKey groupKey(
             ImmutableBitSet groupSet,
@@ -1967,7 +1993,25 @@ public class RelBuilder {
             Iterable<? extends RexNode> nodes,
             Iterable<? extends @Nullable String> fieldNames,
             boolean force) {
-        return project_(nodes, fieldNames, ImmutableList.of(), force);
+        return project(nodes, fieldNames, force, ImmutableSet.of());
+    }
+
+    /**
+     * The same with {@link #project(Iterable, Iterable, boolean)}, with additional variablesSet
+     * param.
+     *
+     * @param nodes Expressions
+     * @param fieldNames Suggested field names
+     * @param force create project even if it is identity
+     * @param variablesSet Correlating variables that are set when reading a row from the input, and
+     *     which may be referenced from the projection expressions
+     */
+    public RelBuilder project(
+            Iterable<? extends RexNode> nodes,
+            Iterable<? extends @Nullable String> fieldNames,
+            boolean force,
+            Iterable<CorrelationId> variablesSet) {
+        return project_(nodes, fieldNames, ImmutableList.of(), force, variablesSet);
     }
 
     /** Creates a {@link Project} of all original fields, plus the given expressions. */
@@ -1976,7 +2020,7 @@ public class RelBuilder {
     }
 
     /** Creates a {@link Project} of all original fields, plus the given list of expressions. */
-    public RelBuilder projectPlus(Iterable<RexNode> nodes) {
+    public RelBuilder projectPlus(Iterable<? extends RexNode> nodes) {
         return project(Iterables.concat(fields(), nodes));
     }
 
@@ -2040,10 +2084,12 @@ public class RelBuilder {
             Iterable<? extends RexNode> nodes,
             Iterable<? extends @Nullable String> fieldNames,
             Iterable<RelHint> hints,
-            boolean force) {
+            boolean force,
+            Iterable<CorrelationId> variablesSet) {
         final Frame frame = requireNonNull(peek_(), "frame stack is empty");
         final RelDataType inputRowType = frame.rel.getRowType();
         final List<RexNode> nodeList = Lists.newArrayList(nodes);
+        final Set<CorrelationId> variables = ImmutableSet.copyOf(variablesSet);
 
         // Perform a quick check for identity. We'll do a deeper check
         // later when we've derived column names.
@@ -2056,8 +2102,9 @@ public class RelBuilder {
             fieldNameList.add(null);
         }
 
+        // Do not merge projection when top projection has correlation variables
         bloat:
-        if (frame.rel instanceof Project && config.bloat() >= 0) {
+        if (frame.rel instanceof Project && config.bloat() >= 0 && variables.isEmpty()) {
             final Project project = (Project) frame.rel;
             // Populate field names. If the upper expression is an input ref and does
             // not have a recommended name, use the name of the underlying field.
@@ -2102,17 +2149,19 @@ public class RelBuilder {
             final ImmutableSet.Builder<RelHint> mergedHints = ImmutableSet.builder();
             mergedHints.addAll(project.getHints());
             mergedHints.addAll(hints);
-            return project_(newNodes, fieldNameList, mergedHints.build(), force);
+            // Keep bottom projection's variablesSet.
+            return project_(
+                    newNodes,
+                    fieldNameList,
+                    mergedHints.build(),
+                    force,
+                    ImmutableSet.copyOf(project.getVariablesSet()));
         }
 
         // Simplify expressions.
         if (config.simplify()) {
-            final RexShuttle shuttle = RexUtil.searchShuttle(getRexBuilder(), null, 2);
             for (int i = 0; i < nodeList.size(); i++) {
-                final RexNode node0 = nodeList.get(i);
-                final RexNode node1 = simplifier.simplifyPreservingType(node0);
-                final RexNode node2 = node1.accept(shuttle);
-                nodeList.set(i, node2);
+                nodeList.set(i, simplifier.simplifyPreservingType(nodeList.get(i)));
             }
         }
 
@@ -2192,7 +2241,8 @@ public class RelBuilder {
                         frame.rel,
                         ImmutableList.copyOf(hints),
                         ImmutableList.copyOf(nodeList),
-                        fieldNameList);
+                        fieldNameList,
+                        variables);
         stack.pop();
         stack.push(new Frame(project, fields.build()));
         return this;
@@ -2216,7 +2266,31 @@ public class RelBuilder {
             Iterable<? extends RexNode> nodes,
             @Nullable Iterable<? extends @Nullable String> fieldNames,
             boolean force) {
-        @SuppressWarnings("unchecked")
+        return projectNamed(nodes, fieldNames, force, ImmutableSet.of());
+    }
+
+    /**
+     * Creates a {@link Project} of the given expressions and field names, and optionally
+     * optimizing.
+     *
+     * <p>If {@code fieldNames} is null, or if a particular entry in {@code fieldNames} is null,
+     * derives field names from the input expressions.
+     *
+     * <p>If {@code force} is false, and the input is a {@code Project}, and the expressions make
+     * the trivial projection ($0, $1, ...), modifies the input.
+     *
+     * @param nodes Expressions
+     * @param fieldNames Suggested field names, or null to generate
+     * @param force Whether to create a renaming Project if the projections are trivial
+     * @param variablesSet Correlating variables that are set when reading a row from the input, and
+     *     which may be referenced from the projection expressions
+     */
+    public RelBuilder projectNamed(
+            Iterable<? extends RexNode> nodes,
+            @Nullable Iterable<? extends @Nullable String> fieldNames,
+            boolean force,
+            Iterable<CorrelationId> variablesSet) {
+        @SuppressWarnings({"unchecked", "rawtypes"})
         final List<? extends RexNode> nodeList =
                 nodes instanceof List ? (List) nodes : ImmutableList.copyOf(nodes);
         final List<@Nullable String> fieldNameList =
@@ -2261,7 +2335,7 @@ public class RelBuilder {
                 stack.push(new Frame(newValues, frame.fields));
             }
         } else {
-            project(nodeList, rowType.getFieldNames(), force);
+            project(nodeList, rowType.getFieldNames(), force, variablesSet);
         }
         return this;
     }
@@ -2879,7 +2953,8 @@ public class RelBuilder {
                 tableSpool(Spool.Type.LAZY, Spool.Type.LAZY, finder.relOptTable).build();
         RelNode seed = tableSpool(Spool.Type.LAZY, Spool.Type.LAZY, finder.relOptTable).build();
         RelNode repeatUnion =
-                struct.repeatUnionFactory.createRepeatUnion(seed, iterative, all, iterationLimit);
+                struct.repeatUnionFactory.createRepeatUnion(
+                        seed, iterative, all, iterationLimit, finder.relOptTable);
         return push(repeatUnion);
     }
 
@@ -2962,7 +3037,7 @@ public class RelBuilder {
             final ImmutableBitSet requiredColumns = RelOptUtil.correlationColumns(id, right.rel);
             join =
                     struct.correlateFactory.createCorrelate(
-                            left.rel, right.rel, id, requiredColumns, joinType);
+                            left.rel, right.rel, ImmutableList.of(), id, requiredColumns, joinType);
         } else {
             RelNode join0 =
                     struct.joinFactory.createJoin(
@@ -3020,6 +3095,7 @@ public class RelBuilder {
                 struct.correlateFactory.createCorrelate(
                         left.rel,
                         right.rel,
+                        ImmutableList.of(),
                         correlationId,
                         ImmutableBitSet.of(requiredOrdinals),
                         joinType);
@@ -3387,11 +3463,40 @@ public class RelBuilder {
      * @param nodes Sort expressions
      */
     public RelBuilder sortLimit(int offset, int fetch, Iterable<? extends RexNode> nodes) {
+        final @Nullable RexNode offsetNode = offset <= 0 ? null : literal(offset);
+        final @Nullable RexNode fetchNode = fetch < 0 ? null : literal(fetch);
+        return sortLimit(offsetNode, fetchNode, nodes);
+    }
+
+    /**
+     * Creates a {@link Sort} by a list of expressions, with limitNode and offsetNode.
+     *
+     * @param offsetNode RexLiteral means number of rows to skip is deterministic, RexDynamicParam
+     *     means number of rows to skip is dynamic.
+     * @param fetchNode RexLiteral means maximum number of rows to fetch is deterministic,
+     *     RexDynamicParam mean maximum number is dynamic.
+     * @param nodes Sort expressions
+     */
+    public RelBuilder sortLimit(
+            @Nullable RexNode offsetNode,
+            @Nullable RexNode fetchNode,
+            Iterable<? extends RexNode> nodes) {
+        if (offsetNode != null) {
+            if (!(offsetNode instanceof RexLiteral || offsetNode instanceof RexDynamicParam)) {
+                throw new IllegalArgumentException(
+                        "OFFSET node must be RexLiteral or RexDynamicParam");
+            }
+        }
+        if (fetchNode != null) {
+            if (!(fetchNode instanceof RexLiteral || fetchNode instanceof RexDynamicParam)) {
+                throw new IllegalArgumentException(
+                        "FETCH node must be RexLiteral or RexDynamicParam");
+            }
+        }
+
         final Registrar registrar = new Registrar(fields(), ImmutableList.of());
         final List<RelFieldCollation> fieldCollations = registrar.registerFieldCollations(nodes);
-
-        final RexNode offsetNode = offset <= 0 ? null : literal(offset);
-        final RexNode fetchNode = fetch < 0 ? null : literal(fetch);
+        final int fetch = fetchNode instanceof RexLiteral ? RexLiteral.intValue(fetchNode) : -1;
         if (offsetNode == null && fetch == 0 && config.simplifyLimit()) {
             return empty();
         }
@@ -3426,7 +3531,8 @@ public class RelBuilder {
                                         sort,
                                         project.getHints(),
                                         project.getProjects(),
-                                        Pair.right(project.getNamedProjects())));
+                                        Pair.right(project.getNamedProjects()),
+                                        project.getVariablesSet()));
                         return this;
                     }
                 }
@@ -4011,8 +4117,7 @@ public class RelBuilder {
         SqlAggFunction op();
 
         /** Returns the alias. */
-        @Nullable
-        String alias();
+        @Nullable String alias();
 
         /**
          * Returns an {@link AggregateCall} that is approximately equivalent to this {@code AggCall}

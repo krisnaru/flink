@@ -18,13 +18,15 @@
 
 package org.apache.flink.runtime.scheduler.strategy;
 
+import org.apache.flink.runtime.execution.ExecutionState;
+
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
 /**
  * {@link InputConsumableDecider} is responsible for determining whether the input of an
- * executionVertex is consumable.
+ * executionVertex or a consumed partition group is consumable.
  */
 public interface InputConsumableDecider {
     /**
@@ -41,10 +43,19 @@ public interface InputConsumableDecider {
             Set<ExecutionVertexID> verticesToSchedule,
             Map<ConsumedPartitionGroup, Boolean> consumableStatusCache);
 
+    /**
+     * Determining whether the consumed partition group is consumable based on finished producers.
+     *
+     * @param consumedPartitionGroup to be determined whether it is consumable.
+     */
+    boolean isConsumableBasedOnFinishedProducers(
+            final ConsumedPartitionGroup consumedPartitionGroup);
+
     /** Factory for {@link InputConsumableDecider}. */
     interface Factory {
         InputConsumableDecider createInstance(
                 SchedulingTopology schedulingTopology,
-                Function<ExecutionVertexID, Boolean> scheduledVertexRetriever);
+                Function<ExecutionVertexID, Boolean> scheduledVertexRetriever,
+                Function<ExecutionVertexID, ExecutionState> executionStateRetriever);
     }
 }

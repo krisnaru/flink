@@ -20,6 +20,7 @@ package org.apache.flink.runtime.taskmanager;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.JobInfo;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.configuration.Configuration;
@@ -37,6 +38,7 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.network.TaskEventDispatcher;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
 import org.apache.flink.runtime.jobgraph.tasks.TaskOperatorEventGateway;
@@ -63,7 +65,12 @@ public class RuntimeEnvironment implements Environment {
 
     private final JobID jobId;
     private final JobVertexID jobVertexId;
+
+    private final JobType jobType;
+
     private final ExecutionAttemptID executionId;
+
+    private final JobInfo jobInfo;
 
     private final TaskInfo taskInfo;
 
@@ -101,6 +108,8 @@ public class RuntimeEnvironment implements Environment {
 
     private final Task containingTask;
 
+    private final TaskManagerActions taskManagerActions;
+
     @Nullable private MailboxExecutor mainMailboxExecutor;
 
     @Nullable private ExecutorService asyncOperationsThreadPool;
@@ -113,9 +122,11 @@ public class RuntimeEnvironment implements Environment {
 
     public RuntimeEnvironment(
             JobID jobId,
+            JobType jobType,
             JobVertexID jobVertexId,
             ExecutionAttemptID executionId,
             ExecutionConfig executionConfig,
+            JobInfo jobInfo,
             TaskInfo taskInfo,
             Configuration jobConfiguration,
             Configuration taskConfiguration,
@@ -139,11 +150,14 @@ public class RuntimeEnvironment implements Environment {
             TaskMetricGroup metrics,
             Task containingTask,
             ExternalResourceInfoProvider externalResourceInfoProvider,
-            ChannelStateWriteRequestExecutorFactory channelStateExecutorFactory) {
+            ChannelStateWriteRequestExecutorFactory channelStateExecutorFactory,
+            TaskManagerActions taskManagerActions) {
 
         this.jobId = checkNotNull(jobId);
+        this.jobType = checkNotNull(jobType);
         this.jobVertexId = checkNotNull(jobVertexId);
         this.executionId = checkNotNull(executionId);
+        this.jobInfo = checkNotNull(jobInfo);
         this.taskInfo = checkNotNull(taskInfo);
         this.executionConfig = checkNotNull(executionConfig);
         this.jobConfiguration = checkNotNull(jobConfiguration);
@@ -169,6 +183,7 @@ public class RuntimeEnvironment implements Environment {
         this.metrics = metrics;
         this.externalResourceInfoProvider = checkNotNull(externalResourceInfoProvider);
         this.channelStateExecutorFactory = checkNotNull(channelStateExecutorFactory);
+        this.taskManagerActions = checkNotNull(taskManagerActions);
     }
 
     // ------------------------------------------------------------------------
@@ -184,6 +199,11 @@ public class RuntimeEnvironment implements Environment {
     }
 
     @Override
+    public JobType getJobType() {
+        return jobType;
+    }
+
+    @Override
     public JobVertexID getJobVertexId() {
         return jobVertexId;
     }
@@ -191,6 +211,11 @@ public class RuntimeEnvironment implements Environment {
     @Override
     public ExecutionAttemptID getExecutionId() {
         return executionId;
+    }
+
+    @Override
+    public JobInfo getJobInfo() {
+        return jobInfo;
     }
 
     @Override
@@ -301,6 +326,11 @@ public class RuntimeEnvironment implements Environment {
     @Override
     public ExternalResourceInfoProvider getExternalResourceInfoProvider() {
         return externalResourceInfoProvider;
+    }
+
+    @Override
+    public TaskManagerActions getTaskManagerActions() {
+        return taskManagerActions;
     }
 
     @Override

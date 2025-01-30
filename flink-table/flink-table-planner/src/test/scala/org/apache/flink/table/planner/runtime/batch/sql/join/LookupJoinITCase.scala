@@ -17,32 +17,36 @@
  */
 package org.apache.flink.table.planner.runtime.batch.sql.join
 
-import org.apache.flink.table.api.{TableSchema, Types}
 import org.apache.flink.table.connector.source.lookup.LookupOptions
 import org.apache.flink.table.connector.source.lookup.LookupOptions.{LookupCacheType, ReloadStrategy}
 import org.apache.flink.table.data.GenericRowData
 import org.apache.flink.table.data.binary.BinaryStringData
 import org.apache.flink.table.planner.factories.TestValuesTableFactory
-import org.apache.flink.table.planner.runtime.utils.{BatchTestBase, InMemoryLookupableTableSource}
+import org.apache.flink.table.planner.plan.utils.SingleSubTaskBoundTableFunction
+import org.apache.flink.table.planner.runtime.utils.BatchTestBase
 import org.apache.flink.table.runtime.functions.table.fullcache.inputformat.FullCacheTestInputFormat
 import org.apache.flink.table.runtime.functions.table.lookup.LookupCacheManager
+import org.apache.flink.testutils.junit.extensions.parameterized.{Parameter, ParameterizedTestExtension, Parameters}
 import org.apache.flink.types.Row
 
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.IterableAssert.assertThatIterable
-import org.junit.{After, Assume, Before, Test}
-import org.junit.Assert.assertEquals
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
+import org.junit.jupiter.api.{AfterEach, BeforeEach, TestTemplate}
+import org.junit.jupiter.api.extension.ExtendWith
 
 import java.lang.{Boolean => JBoolean}
 import java.util
 
 import scala.collection.JavaConversions._
 
-@RunWith(classOf[Parameterized])
-class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheType: LookupCacheType)
-  extends BatchTestBase {
+@ExtendWith(Array(classOf[ParameterizedTestExtension]))
+class LookupJoinITCase extends BatchTestBase {
+
+  @Parameter(value = 0)
+  var isAsyncMode: Boolean = _
+
+  @Parameter(value = 1)
+  var cacheType: LookupCacheType = _
 
   val data = List(
     rowOf(1L, 12L, "Julian"),
@@ -65,17 +69,30 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     rowOf(33, 3L, "Fabian"),
     rowOf(44, null, "Hello world"))
 
-  @Before
+  @BeforeEach
   override def before() {
     super.before()
-    if (legacyTableSource) {
-      InMemoryLookupableTableSource.RESOURCE_COUNTER.set(0)
-    } else {
-      TestValuesTableFactory.RESOURCE_COUNTER.set(0)
-      FullCacheTestInputFormat.OPEN_CLOSED_COUNTER.set(0)
-    }
+    TestValuesTableFactory.RESOURCE_COUNTER.set(0)
+    FullCacheTestInputFormat.OPEN_CLOSED_COUNTER.set(0)
     createScanTable("T", data)
     createScanTable("nullableT", dataWithNull)
+
+    createLookupTable("user_table_custom_shuffle", userData, enableCustomShuffle = true)
+    createLookupTable(
+      "user_table_custom_shuffle_non_deterministic",
+      userData,
+      enableCustomShuffle = true,
+      customShuffleDeterministic = false)
+    createLookupTable(
+      "user_table_custom_shuffle_empty_partitioner",
+      userData,
+      enableCustomShuffle = true,
+      customShuffleEmptyPartitioner = true)
+    createLookupTable(
+      "user_table_custom_shuffle_without_udf",
+      userData,
+      enableCustomShuffle = true,
+      customShuffleWithUDF = false)
 
     createLookupTable("userTable", userData)
     createLookupTable("userTableWithNull", userDataWithNull)
@@ -85,47 +102,22 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     env.getConfig.disableObjectReuse()
   }
 
-  @After
+  @AfterEach
   override def after(): Unit = {
-    if (legacyTableSource) {
-      assertEquals(0, InMemoryLookupableTableSource.RESOURCE_COUNTER.get())
-    } else {
-      assertEquals(0, TestValuesTableFactory.RESOURCE_COUNTER.get())
-      assertEquals(0, FullCacheTestInputFormat.OPEN_CLOSED_COUNTER.get())
-    }
+    assertThat(TestValuesTableFactory.RESOURCE_COUNTER.get()).isEqualTo(0)
+    assertThat(FullCacheTestInputFormat.OPEN_CLOSED_COUNTER.get()).isEqualTo(0)
   }
 
-  private def createLookupTable(tableName: String, data: List[Row]): Unit = {
-    if (legacyTableSource) {
-      val userSchema = TableSchema
-        .builder()
-        .field("age", Types.INT)
-        .field("id", Types.LONG)
-        .field("name", Types.STRING)
-        .build()
-      InMemoryLookupableTableSource.createTemporaryTable(
-        tEnv,
-        isAsyncMode,
-        data,
-        userSchema,
-        tableName,
-        isBounded = true)
-    } else {
-      val dataId = TestValuesTableFactory.registerData(data)
-      val cacheOptions =
-        if (cacheType == LookupCacheType.PARTIAL)
-          s"""
-             |  '${LookupOptions.CACHE_TYPE.key()}' = '${LookupCacheType.PARTIAL}',
-             |  '${LookupOptions.PARTIAL_CACHE_MAX_ROWS.key()}' = '${Long.MaxValue}',
-             |""".stripMargin
-        else if (cacheType == LookupCacheType.FULL)
-          s"""
-             |  '${LookupOptions.CACHE_TYPE.key()}' = '${LookupCacheType.FULL}',
-             |  '${LookupOptions.FULL_CACHE_RELOAD_STRATEGY.key()}' = '${ReloadStrategy.PERIODIC}',
-             |  '${LookupOptions.FULL_CACHE_PERIODIC_RELOAD_INTERVAL.key()}' = '${Long.MaxValue}',
-             |""".stripMargin
-        else ""
-
+  private def createLookupTable(
+      tableName: String,
+      data: List[Row],
+      enableCustomShuffle: Boolean = false,
+      customShuffleDeterministic: Boolean = true,
+      customShuffleEmptyPartitioner: Boolean = false,
+      customShuffleWithUDF: Boolean = true): Unit = {
+    val dataId = TestValuesTableFactory.registerData(data)
+    val cacheOptions = getCacheOptions()
+    if (!enableCustomShuffle) {
       tEnv.executeSql(s"""
                          |CREATE TABLE $tableName (
                          |  `age` INT,
@@ -139,40 +131,77 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
                          |  'bounded' = 'true'
                          |)
                          |""".stripMargin)
+    } else {
+      if (customShuffleEmptyPartitioner || !customShuffleWithUDF) {
+        tEnv.executeSql(s"""
+                           |CREATE TABLE $tableName (
+                           |  `age` INT,
+                           |  `id` BIGINT,
+                           |  `name` STRING
+                           |) WITH (
+                           |  $cacheOptions
+                           |  'connector' = 'values',
+                           |  'data-id' = '$dataId',
+                           |  'async' = '$isAsyncMode',
+                           |  'bounded' = 'true',
+                           |  'enable-custom-shuffle' = 'true',
+                           |  'custom-shuffle-empty-partitioner' = '$customShuffleEmptyPartitioner'
+                           |)
+                           |""".stripMargin)
+      } else {
+        tEnv.executeSql(
+          s"""
+             |CREATE TABLE $tableName (
+             |  `age` INT,
+             |  `id` BIGINT,
+             |  `name` STRING
+             |) WITH (
+             |  $cacheOptions
+             |  'connector' = 'values',
+             |  'data-id' = '$dataId',
+             |  'async' = '$isAsyncMode',
+             |  'bounded' = 'true',
+             |  'enable-custom-shuffle' = 'true',
+             |  'lookup-function-class' = '${new SingleSubTaskBoundTableFunction().getClass.getName}',
+             |  'custom-shuffle-deterministic' = '$customShuffleDeterministic'
+             |)
+             |""".stripMargin)
+      }
     }
   }
 
   private def createLookupTableWithComputedColumn(tableName: String, data: List[Row]): Unit = {
-    if (!legacyTableSource) {
-      val dataId = TestValuesTableFactory.registerData(data)
-      val cacheOptions =
-        if (cacheType == LookupCacheType.PARTIAL)
-          s"""
-             |  '${LookupOptions.CACHE_TYPE.key()}' = '${LookupCacheType.PARTIAL}',
-             |  '${LookupOptions.PARTIAL_CACHE_MAX_ROWS.key()}' = '${Long.MaxValue}',
-             |""".stripMargin
-        else if (cacheType == LookupCacheType.FULL)
-          s"""
-             |  '${LookupOptions.CACHE_TYPE.key()}' = '${LookupCacheType.FULL}',
-             |  '${LookupOptions.FULL_CACHE_RELOAD_STRATEGY.key()}' = '${ReloadStrategy.PERIODIC}',
-             |  '${LookupOptions.FULL_CACHE_PERIODIC_RELOAD_INTERVAL.key()}' = '${Long.MaxValue}',
-             |""".stripMargin
-        else ""
-      tEnv.executeSql(s"""
-                         |CREATE TABLE $tableName (
-                         |  `age` INT,
-                         |  `id` BIGINT,
-                         |  `name` STRING,
-                         |  `nominal_age` as age + 1
-                         |) WITH (
-                         |  $cacheOptions
-                         |  'connector' = 'values',
-                         |  'data-id' = '$dataId',
-                         |  'async' = '$isAsyncMode',
-                         |  'bounded' = 'true'
-                         |)
-                         |""".stripMargin)
-    }
+    val dataId = TestValuesTableFactory.registerData(data)
+    val cacheOptions = getCacheOptions()
+    tEnv.executeSql(s"""
+                       |CREATE TABLE $tableName (
+                       |  `age` INT,
+                       |  `id` BIGINT,
+                       |  `name` STRING,
+                       |  `nominal_age` as age + 1
+                       |) WITH (
+                       |  $cacheOptions
+                       |  'connector' = 'values',
+                       |  'data-id' = '$dataId',
+                       |  'async' = '$isAsyncMode',
+                       |  'bounded' = 'true'
+                       |)
+                       |""".stripMargin)
+  }
+
+  private def getCacheOptions(): String = {
+    if (cacheType == LookupCacheType.PARTIAL) {
+      s"""
+         |  '${LookupOptions.CACHE_TYPE.key()}' = '${LookupCacheType.PARTIAL}',
+         |  '${LookupOptions.PARTIAL_CACHE_MAX_ROWS.key()}' = '${Long.MaxValue}',
+         |""".stripMargin
+    } else if (cacheType == LookupCacheType.FULL) {
+      s"""
+         |  '${LookupOptions.CACHE_TYPE.key()}' = '${LookupCacheType.FULL}',
+         |  '${LookupOptions.FULL_CACHE_RELOAD_STRATEGY.key()}' = '${ReloadStrategy.PERIODIC}',
+         |  '${LookupOptions.FULL_CACHE_PERIODIC_RELOAD_INTERVAL.key()}' = '${Long.MaxValue}',
+         |""".stripMargin
+    } else { "" }
   }
 
   private def createScanTable(tableName: String, data: List[Row]): Unit = {
@@ -186,12 +215,13 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
                        |) WITH (
                        |  'connector' = 'values',
                        |  'data-id' = '$dataId',
+                       |  'runtime-source' ='NewSource',
                        |  'bounded' = 'true'
                        |)
                        |""".stripMargin)
   }
 
-  @Test
+  @TestTemplate
   def testLeftJoinTemporalTableWithLocalPredicate(): Unit = {
     val sql = s"SELECT T.id, T.len, T.content, D.name, D.age FROM T LEFT JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.id = D.id " +
@@ -207,7 +237,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTable(): Unit = {
     val sql = s"SELECT T.id, T.len, T.content, D.name FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.id = D.id"
@@ -219,7 +249,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableWithPushDown(): Unit = {
     val sql = s"SELECT T.id, T.len, T.content, D.name FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.id = D.id AND D.age > 20"
@@ -229,7 +259,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableWithNonEqualFilter(): Unit = {
     val sql = s"SELECT T.id, T.len, T.content, D.name, D.age FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.id = D.id WHERE T.len <= D.age"
@@ -240,7 +270,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableOnMultiFields(): Unit = {
     val sql = s"SELECT T.id, T.len, D.name FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.id = D.id AND T.content = D.name"
@@ -249,7 +279,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableOnMultiFieldsWithUdf(): Unit = {
     val sql = s"SELECT T.id, T.len, D.name FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON mod(T.id, 4) = D.id AND T.content = D.name"
@@ -258,7 +288,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableOnMultiKeyFields(): Unit = {
     val sql = s"SELECT T.id, T.len, D.name FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.content = D.name AND T.id = D.id"
@@ -267,7 +297,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testLeftJoinTemporalTable(): Unit = {
     val sql = s"SELECT T.id, T.len, D.name, D.age FROM T LEFT JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.id = D.id"
@@ -282,7 +312,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableOnMultiKeyFieldsWithNullData(): Unit = {
     val sql = s"SELECT T.id, T.len, D.name FROM nullableT T JOIN userTableWithNull " +
       "for system_time as of T.proctime AS D ON T.content = D.name AND T.id = D.id"
@@ -291,7 +321,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testLeftJoinTemporalTableOnMultiKeyFieldsWithNullData(): Unit = {
     val sql = s"SELECT D.id, T.len, D.name FROM nullableT T LEFT JOIN userTableWithNull " +
       "for system_time as of T.proctime AS D ON T.content = D.name AND T.id = D.id"
@@ -303,7 +333,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableOnNullConstantKey(): Unit = {
     val sql = s"SELECT T.id, T.len, T.content FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON D.id = null"
@@ -311,7 +341,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableOnMultiKeyFieldsWithNullConstantKey(): Unit = {
     val sql = s"SELECT T.id, T.len, D.name FROM T JOIN userTable " +
       "for system_time as of T.proctime AS D ON T.content = D.name AND null = D.id"
@@ -319,11 +349,8 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableWithComputedColumn(): Unit = {
-    // Computed column do not support in legacyTableSource.
-    Assume.assumeFalse(legacyTableSource)
-
     val sql = s"SELECT T.id, T.len, T.content, D.name, D.age, D.nominal_age " +
       "FROM T JOIN userTableWithComputedColumn " +
       "for system_time as of T.proctime AS D ON T.id = D.id"
@@ -335,11 +362,8 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testJoinTemporalTableWithComputedColumnAndPushDown(): Unit = {
-    // Computed column do not support in legacyTableSource.
-    Assume.assumeFalse(legacyTableSource)
-
     val sql = s"SELECT T.id, T.len, T.content, D.name, D.age, D.nominal_age " +
       "FROM T JOIN userTableWithComputedColumn " +
       "for system_time as of T.proctime AS D ON T.id = D.id and D.nominal_age > 12"
@@ -350,7 +374,7 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     checkResult(sql, expected)
   }
 
-  @Test
+  @TestTemplate
   def testLookupCacheSharingAcrossSubtasks(): Unit = {
     if (cacheType == LookupCacheType.NONE) {
       return
@@ -408,6 +432,83 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
     }
   }
 
+  @TestTemplate
+  def testJoinTemporalTableWithLookupHintEnableShuffle(): Unit = {
+    val sql = s"SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ T.id, D.name FROM " +
+      s"T JOIN user_table_custom_shuffle " +
+      s"for system_time as of T.proctime AS D ON T.id = D.id AND D.name = 'Fabian' AND D.age = 33"
+    val expected = Seq(
+      BatchTestBase.row(1, "Fabian"),
+      BatchTestBase.row(2, "Fabian"),
+      BatchTestBase.row(3, "Fabian"),
+      BatchTestBase.row(8, "Fabian"),
+      BatchTestBase.row(9, "Fabian")
+    )
+    checkResult(sql, expected)
+  }
+
+  @TestTemplate
+  def testJoinTemporalTableWithLookupHintEnableShuffleOnNormalSource(): Unit = {
+    val sql = s"SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ T.id, D.name FROM " +
+      s"T JOIN userTable " +
+      s"for system_time as of T.proctime AS D ON T.id = D.id"
+    val expected = Seq(
+      BatchTestBase.row(1, "Julian"),
+      BatchTestBase.row(2, "Jark"),
+      BatchTestBase.row(3, "Fabian")
+    )
+    checkResult(sql, expected)
+  }
+
+  @TestTemplate
+  def testJoinTemporalTableWithLookupHintEnableNonDeterministicShuffle(): Unit = {
+    val sql = s"SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ T.id, D.name FROM " +
+      s"T JOIN user_table_custom_shuffle_non_deterministic " +
+      s"for system_time as of T.proctime AS D ON T.id = D.id AND D.name = 'Fabian' AND D.age = 33"
+    // The non-deterministic partitioner will be applied as the input is insert-only.
+    val expected = Seq(
+      BatchTestBase.row(1, "Fabian"),
+      BatchTestBase.row(2, "Fabian"),
+      BatchTestBase.row(3, "Fabian"),
+      BatchTestBase.row(8, "Fabian"),
+      BatchTestBase.row(9, "Fabian")
+    )
+    checkResult(sql, expected)
+  }
+
+  @TestTemplate
+  def testJoinTemporalTableWithLookupHintEnableShuffleOnAllConstantLookupKeys(): Unit = {
+    val sql = s"SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ T.id, D.name FROM " +
+      s"T JOIN user_table_custom_shuffle " +
+      s"for system_time as of T.proctime AS D ON D.id = 1 AND D.name = 'Fabian' AND D.age = 33"
+    val expected = Seq(
+      BatchTestBase.row(1, "Fabian"),
+      BatchTestBase.row(2, "Fabian"),
+      BatchTestBase.row(3, "Fabian"),
+      BatchTestBase.row(8, "Fabian"),
+      BatchTestBase.row(9, "Fabian")
+    )
+    checkResult(sql, expected)
+  }
+
+  @TestTemplate
+  def testJoinTemporalTableWithLookupHintEnableShuffleEmptyPartitioner(): Unit = {
+    val sql = s"SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ T.id, D.name FROM " +
+      s"T JOIN user_table_custom_shuffle_empty_partitioner " +
+      s"for system_time as of T.proctime AS D ON T.id = D.id AND D.name = 'Fabian' AND D.age = 33"
+    val expected = Seq(BatchTestBase.row(3, "Fabian"))
+    checkResult(sql, expected)
+  }
+
+  @TestTemplate
+  def testJoinTemporalTableWithLookupHintEnableShuffleWithoutUDF(): Unit = {
+    val sql = s"SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ T.id, D.name FROM " +
+      s"T JOIN user_table_custom_shuffle_without_udf " +
+      s"for system_time as of T.proctime AS D ON T.id = D.id AND D.name = 'Fabian' AND D.age = 33"
+    val expected = Seq(BatchTestBase.row(3, "Fabian"))
+    checkResult(sql, expected)
+  }
+
   def ji(i: Int): java.lang.Integer = {
     new java.lang.Integer(i)
   }
@@ -419,21 +520,19 @@ class LookupJoinITCase(legacyTableSource: Boolean, isAsyncMode: Boolean, cacheTy
 
 object LookupJoinITCase {
 
-  val LEGACY_TABLE_SOURCE: JBoolean = JBoolean.TRUE;
-  val DYNAMIC_TABLE_SOURCE: JBoolean = JBoolean.FALSE;
   val ASYNC_MODE: JBoolean = JBoolean.TRUE;
   val SYNC_MODE: JBoolean = JBoolean.FALSE;
 
-  @Parameterized.Parameters(name = "LegacyTableSource={0}, isAsyncMode = {1}, cacheType = {2}")
+  @Parameters(name = "IsAsyncMode = {0}, cacheType = {1}")
   def parameters(): util.Collection[Array[java.lang.Object]] = {
     Seq[Array[AnyRef]](
-      Array(LEGACY_TABLE_SOURCE, ASYNC_MODE, LookupCacheType.NONE),
-      Array(LEGACY_TABLE_SOURCE, SYNC_MODE, LookupCacheType.NONE),
-      Array(DYNAMIC_TABLE_SOURCE, ASYNC_MODE, LookupCacheType.NONE),
-      Array(DYNAMIC_TABLE_SOURCE, SYNC_MODE, LookupCacheType.NONE),
-      Array(DYNAMIC_TABLE_SOURCE, ASYNC_MODE, LookupCacheType.PARTIAL),
-      Array(DYNAMIC_TABLE_SOURCE, SYNC_MODE, LookupCacheType.PARTIAL),
-      Array(DYNAMIC_TABLE_SOURCE, SYNC_MODE, LookupCacheType.FULL)
+      Array(ASYNC_MODE, LookupCacheType.NONE),
+      Array(SYNC_MODE, LookupCacheType.NONE),
+      Array(ASYNC_MODE, LookupCacheType.NONE),
+      Array(SYNC_MODE, LookupCacheType.NONE),
+      Array(ASYNC_MODE, LookupCacheType.PARTIAL),
+      Array(SYNC_MODE, LookupCacheType.PARTIAL),
+      Array(SYNC_MODE, LookupCacheType.FULL)
     )
   }
 }

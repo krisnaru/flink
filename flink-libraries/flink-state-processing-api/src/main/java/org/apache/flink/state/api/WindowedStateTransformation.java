@@ -26,7 +26,7 @@ import org.apache.flink.api.common.functions.RichFunction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
-import org.apache.flink.state.api.output.operators.StateBootstrapWrapperOperator;
+import org.apache.flink.state.api.output.operators.StateBootstrapWrapperOperatorFactory;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.functions.windowing.PassThroughWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
@@ -77,7 +77,7 @@ public class WindowedStateTransformation<T, K, W extends Window> {
         this.builder =
                 new WindowOperatorBuilder<>(
                         windowAssigner,
-                        windowAssigner.getDefaultTrigger(null),
+                        windowAssigner.getDefaultTrigger(),
                         input.getExecutionEnvironment().getConfig(),
                         input.getType(),
                         keySelector,
@@ -153,10 +153,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
         function = input.getExecutionEnvironment().clean(function);
         reduceFunction = input.getExecutionEnvironment().clean(reduceFunction);
 
-        WindowOperator<K, T, ?, R, W> operator = builder.reduce(reduceFunction, function);
+        WindowOperator<K, T, ?, R, W> operator =
+                (WindowOperator<K, T, ?, R, W>) builder.reduce(reduceFunction, function);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }
@@ -179,10 +181,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
         function = input.getExecutionEnvironment().clean(function);
         reduceFunction = input.getExecutionEnvironment().clean(reduceFunction);
 
-        WindowOperator<K, T, ?, R, W> operator = builder.reduce(reduceFunction, function);
+        WindowOperator<K, T, ?, R, W> operator =
+                (WindowOperator<K, T, ?, R, W>) builder.reduce(reduceFunction, function);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }
@@ -314,10 +318,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
         aggregateFunction = input.getExecutionEnvironment().clean(aggregateFunction);
 
         WindowOperator<K, T, ?, R, W> operator =
-                builder.aggregate(aggregateFunction, windowFunction, accumulatorType);
+                (WindowOperator<K, T, ?, R, W>)
+                        builder.aggregate(aggregateFunction, windowFunction, accumulatorType);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }
@@ -391,10 +397,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
         aggregateFunction = input.getExecutionEnvironment().clean(aggregateFunction);
 
         WindowOperator<K, T, ?, R, W> operator =
-                builder.aggregate(aggregateFunction, windowFunction, accumulatorType);
+                (WindowOperator<K, T, ?, R, W>)
+                        builder.aggregate(aggregateFunction, windowFunction, accumulatorType);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }
@@ -415,10 +423,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
      * @return The data stream that is the result of applying the window function to the window.
      */
     public <R> StateBootstrapTransformation<T> apply(WindowFunction<T, R, K, W> function) {
-        WindowOperator<K, T, ?, R, W> operator = builder.apply(function);
+        WindowOperator<K, T, ?, R, W> operator =
+                (WindowOperator<K, T, ?, R, W>) builder.apply(function);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }
@@ -439,10 +449,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
             WindowFunction<T, R, K, W> function, TypeInformation<R> resultType) {
         function = input.getExecutionEnvironment().clean(function);
 
-        WindowOperator<K, T, ?, R, W> operator = builder.apply(function);
+        WindowOperator<K, T, ?, R, W> operator =
+                (WindowOperator<K, T, ?, R, W>) builder.apply(function);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }
@@ -460,10 +472,12 @@ public class WindowedStateTransformation<T, K, W extends Window> {
      */
     @PublicEvolving
     public <R> StateBootstrapTransformation<T> process(ProcessWindowFunction<T, R, K, W> function) {
-        WindowOperator<K, T, ?, R, W> operator = builder.process(function);
+        WindowOperator<K, T, ?, R, W> operator =
+                (WindowOperator<K, T, ?, R, W>) builder.process(function);
 
         SavepointWriterOperatorFactory factory =
-                (timestamp, path) -> new StateBootstrapWrapperOperator<>(timestamp, path, operator);
+                (timestamp, path) ->
+                        new StateBootstrapWrapperOperatorFactory<>(timestamp, path, operator);
         return new StateBootstrapTransformation<>(
                 input, operatorMaxParallelism, factory, keySelector, keyType);
     }

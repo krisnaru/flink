@@ -18,10 +18,12 @@
 package org.apache.flink.table.planner.calcite
 
 import org.apache.flink.api.common.typeinfo.{BasicTypeInfo, NothingTypeInfo, TypeInformation}
-import org.apache.flink.table.api.{DataTypes, TableException, TableSchema, ValidationException}
+import org.apache.flink.table.api.{DataTypes, TableException, ValidationException}
 import org.apache.flink.table.calcite.ExtendedRelTypeFactory
+import org.apache.flink.table.legacy.api.TableSchema
+import org.apache.flink.table.legacy.types.logical.TypeInformationRawType
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory.toLogicalType
-import org.apache.flink.table.planner.plan.schema.{GenericRelDataType, _}
+import org.apache.flink.table.planner.plan.schema._
 import org.apache.flink.table.runtime.types.{LogicalTypeDataTypeConverter, PlannerTypeUtils}
 import org.apache.flink.table.types.logical._
 import org.apache.flink.table.typeutils.TimeIndicatorTypeInfo
@@ -285,6 +287,18 @@ class FlinkTypeFactory(
   }
 
   /**
+   * Creats a struct type with the persisted columns using FlinkTypeFactory
+   *
+   * @param tableSchema
+   *   schema to convert to Calcite's specific one
+   * @return
+   *   a struct type with the input fieldsNames, input fieldTypes.
+   */
+  def buildPersistedRelNodeRowType(tableSchema: TableSchema): RelDataType = {
+    buildRelNodeRowType(TableSchemaUtils.getPersistedSchema(tableSchema))
+  }
+
+  /**
    * Creates a struct type with the input fieldNames and input fieldTypes using FlinkTypeFactory.
    *
    * @param fieldNames
@@ -410,7 +424,11 @@ class FlinkTypeFactory(
         new GenericRelDataType(generic.genericType, isNullable, typeSystem)
 
       case it: TimeIndicatorRelDataType =>
-        new TimeIndicatorRelDataType(it.typeSystem, it.originalType, isNullable, it.isEventTime)
+        new TimeIndicatorRelDataType(
+          it.typeSystemField,
+          it.originalType,
+          isNullable,
+          it.isEventTime)
 
       // for nested rows we keep the nullability property,
       // top-level rows fall back to Calcite's default handling

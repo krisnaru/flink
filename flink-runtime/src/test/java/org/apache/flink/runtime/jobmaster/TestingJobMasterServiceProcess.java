@@ -19,13 +19,16 @@
 package org.apache.flink.runtime.jobmaster;
 
 import org.apache.flink.runtime.jobmaster.utils.TestingJobMasterGatewayBuilder;
+import org.apache.flink.util.concurrent.FutureUtils;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 /** Testing implementation of {@link JobMasterServiceProcess}. */
 public class TestingJobMasterServiceProcess implements JobMasterServiceProcess {
 
+    private final UUID leaderSessionId;
     private final Supplier<CompletableFuture<Void>> closeAsyncSupplier;
     private final Supplier<Boolean> isInitializedAndRunningSupplier;
     private final Supplier<CompletableFuture<JobMasterGateway>> getJobMasterGatewayFutureSupplier;
@@ -33,11 +36,13 @@ public class TestingJobMasterServiceProcess implements JobMasterServiceProcess {
     private final Supplier<CompletableFuture<String>> getLeaderAddressFutureSupplier;
 
     private TestingJobMasterServiceProcess(
+            UUID leaderSessionId,
             Supplier<CompletableFuture<Void>> closeAsyncSupplier,
             Supplier<Boolean> isInitializedAndRunningSupplier,
             Supplier<CompletableFuture<JobMasterGateway>> getJobMasterGatewayFutureSupplier,
             Supplier<CompletableFuture<JobManagerRunnerResult>> getResultFutureSupplier,
             Supplier<CompletableFuture<String>> getLeaderAddressFutureSupplier) {
+        this.leaderSessionId = leaderSessionId;
         this.closeAsyncSupplier = closeAsyncSupplier;
         this.isInitializedAndRunningSupplier = isInitializedAndRunningSupplier;
         this.getJobMasterGatewayFutureSupplier = getJobMasterGatewayFutureSupplier;
@@ -48,6 +53,11 @@ public class TestingJobMasterServiceProcess implements JobMasterServiceProcess {
     @Override
     public CompletableFuture<Void> closeAsync() {
         return closeAsyncSupplier.get();
+    }
+
+    @Override
+    public UUID getLeaderSessionId() {
+        return leaderSessionId;
     }
 
     @Override
@@ -76,7 +86,10 @@ public class TestingJobMasterServiceProcess implements JobMasterServiceProcess {
 
     /** Builder for {@link TestingJobMasterServiceProcess}. */
     public static final class Builder {
-        private Supplier<CompletableFuture<Void>> closeAsyncSupplier = unsupportedOperation();
+
+        private UUID leaderSessionId = UUID.randomUUID();
+        private Supplier<CompletableFuture<Void>> closeAsyncSupplier =
+                FutureUtils::completedVoidFuture;
         private Supplier<Boolean> isInitializedAndRunningSupplier = unsupportedOperation();
         private Supplier<CompletableFuture<JobMasterGateway>> getJobMasterGatewayFutureSupplier =
                 () ->
@@ -122,8 +135,14 @@ public class TestingJobMasterServiceProcess implements JobMasterServiceProcess {
             return this;
         }
 
+        public Builder setLeaderSessionId(UUID leaderSessionId) {
+            this.leaderSessionId = leaderSessionId;
+            return this;
+        }
+
         public TestingJobMasterServiceProcess build() {
             return new TestingJobMasterServiceProcess(
+                    leaderSessionId,
                     closeAsyncSupplier,
                     isInitializedAndRunningSupplier,
                     getJobMasterGatewayFutureSupplier,

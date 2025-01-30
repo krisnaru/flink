@@ -122,6 +122,19 @@ public class PythonOptions {
                                     + "optional parameter exists. The option is equivalent to the command line option "
                                     + "\"-pyreq\".");
 
+    /** The configuration allows user to define python path for client and workers. */
+    public static final ConfigOption<String> PYTHON_PATH =
+            ConfigOptions.key("python.pythonpath")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Specify the path on the Worker Node where the Flink Python Dependencies are installed, which "
+                                                    + "gets added into the PYTHONPATH of the Python Worker."
+                                                    + " The option is equivalent to the command line option \"-pypath\".")
+                                    .build());
+
     public static final ConfigOption<String> PYTHON_ARCHIVES =
             ConfigOptions.key("python.archives")
                     .stringType()
@@ -146,8 +159,8 @@ public class PythonOptions {
                     .defaultValue("python")
                     .withDescription(
                             "Specify the path of the python interpreter used to execute the python "
-                                    + "UDF worker. The python UDF worker depends on Python 3.7+, Apache Beam "
-                                    + "(version == 2.43.0), Pip (version >= 20.3) and SetupTools (version >= 37.0.0). "
+                                    + "UDF worker. The python UDF worker depends on Python 3.8+, Apache Beam "
+                                    + "(version >= 2.54.0, <= 2.61.0), Pip (version >= 20.3) and SetupTools (version >= 37.0.0). "
                                     + "Please ensure that the specified environment meets the above requirements. The "
                                     + "option is equivalent to the command line option \"-pyexec\".");
 
@@ -169,7 +182,7 @@ public class PythonOptions {
                                     .text("2. the command line option \"-pyclientexec\";")
                                     .linebreak()
                                     .text(
-                                            "3. the configuration 'python.client.executable' defined in flink-conf.yaml")
+                                            "3. the configuration 'python.client.executable' defined in config.yaml")
                                     .linebreak()
                                     .text("4. the environment variable PYFLINK_CLIENT_EXECUTABLE;")
                                     .build());

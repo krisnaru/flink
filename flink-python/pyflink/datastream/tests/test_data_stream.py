@@ -26,8 +26,8 @@ from pyflink.common import Row, Configuration
 from pyflink.common.time import Time
 from pyflink.common.typeinfo import Types
 from pyflink.common.watermark_strategy import WatermarkStrategy, TimestampAssigner
-from pyflink.datastream import (TimeCharacteristic, RuntimeContext, SlotSharingGroup,
-                                StreamExecutionEnvironment, RuntimeExecutionMode)
+from pyflink.datastream import (RuntimeContext, SlotSharingGroup, StreamExecutionEnvironment,
+                                RuntimeExecutionMode)
 from pyflink.datastream.data_stream import DataStream
 from pyflink.datastream.functions import (AggregateFunction, CoMapFunction, CoFlatMapFunction,
                                           MapFunction, FilterFunction, FlatMapFunction,
@@ -51,7 +51,7 @@ class DataStreamTests(object):
     def setUp(self) -> None:
         super(DataStreamTests, self).setUp()
         config = get_j_env_configuration(self.env._j_stream_execution_environment)
-        config.setString("akka.ask.timeout", "20 s")
+        config.setString("pekko.ask.timeout", "20 s")
         self.test_sink = DataStreamTestSinkFunction()
 
     def tearDown(self) -> None:
@@ -122,7 +122,6 @@ class DataStreamTests(object):
 
     def test_keyed_process_function_with_state(self):
         self.env.get_config().set_auto_watermark_interval(2000)
-        self.env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
         data_stream = self.env.from_collection([(1, 'hi', '1603708211000'),
                                                 (2, 'hello', '1603708224000'),
                                                 (3, 'hi', '1603708226000'),
@@ -482,6 +481,30 @@ class DataStreamTests(object):
         ]
         self.assert_equals_sorted(expected, self.test_sink.get_results())
 
+    def test_process_side_output(self):
+        tag = OutputTag("side", Types.INT())
+
+        ds = self.env.from_collection([('a', 0), ('b', 1), ('c', 2)],
+                                      type_info=Types.ROW([Types.STRING(), Types.INT()]))
+
+        class MyProcessFunction(ProcessFunction):
+
+            def process_element(self, value, ctx: 'ProcessFunction.Context'):
+                yield value[0]
+                yield tag, value[1]
+
+        ds2 = ds.process(MyProcessFunction(), output_type=Types.STRING())
+        main_sink = DataStreamTestSinkFunction()
+        ds2.add_sink(main_sink)
+        side_sink = DataStreamTestSinkFunction()
+        ds2.get_side_output(tag).add_sink(side_sink)
+
+        self.env.execute("test_process_side_output")
+        main_expected = ['a', 'b', 'c']
+        self.assert_equals_sorted(main_expected, main_sink.get_results())
+        side_expected = ['0', '1', '2']
+        self.assert_equals_sorted(side_expected, side_sink.get_results())
+
     def test_side_output_chained_with_upstream_operator(self):
         tag = OutputTag("side", Types.INT())
 
@@ -565,6 +588,40 @@ class DataStreamTests(object):
         side_expected = ['0', '0', '1', '1', '2', '3']
         self.assert_equals_sorted(side_expected, side_sink.get_results())
 
+    def test_co_broadcast_side_output(self):
+        tag = OutputTag("side", Types.INT())
+
+        class MyBroadcastProcessFunction(BroadcastProcessFunction):
+
+            def process_element(self, value, ctx):
+                yield value[0]
+                yield tag, value[1]
+
+            def process_broadcast_element(self, value, ctx):
+                yield value[1]
+                yield tag, value[0]
+
+        self.env.set_parallelism(2)
+        ds = self.env.from_collection([('a', 0), ('b', 1), ('c', 2)],
+                                      type_info=Types.ROW([Types.STRING(), Types.INT()]))
+        ds_broadcast = self.env.from_collection([(3, 'd'), (4, 'f')],
+                                                type_info=Types.ROW([Types.INT(), Types.STRING()]))
+        map_state_desc = MapStateDescriptor(
+            "dummy", key_type_info=Types.INT(), value_type_info=Types.STRING()
+        )
+        ds = ds.connect(ds_broadcast.broadcast(map_state_desc)).process(
+            MyBroadcastProcessFunction(), output_type=Types.STRING()
+        )
+        side_sink = DataStreamTestSinkFunction()
+        ds.get_side_output(tag).add_sink(side_sink)
+        ds.add_sink(self.test_sink)
+
+        self.env.execute("test_co_broadcast_process_side_output")
+        main_expected = ['a', 'b', 'c', 'd', 'd', 'f', 'f']
+        self.assert_equals_sorted(main_expected, self.test_sink.get_results())
+        side_expected = ['0', '1', '2', '3', '3', '4', '4']
+        self.assert_equals_sorted(side_expected, side_sink.get_results())
+
     def test_keyed_process_side_output(self):
         tag = OutputTag("side", Types.INT())
 
@@ -618,27 +675,71 @@ class DataStreamTests(object):
                 )
 
             def process_element1(self, value, ctx: 'KeyedCoProcessFunction.Context'):
-                yield value[1]
+                yield ctx.get_current_key(), value[1]
                 self.reducing_state.add(1)
                 yield tag, self.reducing_state.get()
 
             def process_element2(self, value, ctx: 'KeyedCoProcessFunction.Context'):
-                yield value[0]
+                yield ctx.get_current_key(), value[0]
                 self.reducing_state.add(1)
                 yield tag, self.reducing_state.get()
 
         ds3 = ds1.key_by(lambda e: e[0])\
             .connect(ds2.key_by(lambda e: e[1]))\
-            .process(MyKeyedCoProcessFunction(), output_type=Types.INT())
+            .process(MyKeyedCoProcessFunction(),
+                     output_type=Types.TUPLE([Types.STRING(), Types.INT()]))
         main_sink = DataStreamTestSinkFunction()
         ds3.add_sink(main_sink)
         side_sink = DataStreamTestSinkFunction()
         ds3.get_side_output(tag).add_sink(side_sink)
 
         self.env.execute("test_keyed_co_process_side_output")
-        main_expected = ['1', '2', '3', '4', '5', '6', '7', '8']
+        main_expected = ['(a,1)', '(b,2)', '(a,3)', '(b,4)', '(b,5)', '(a,6)', '(b,7)', '(a,8)']
         self.assert_equals_sorted(main_expected, main_sink.get_results())
         side_expected = ['1', '1', '2', '2', '3', '3', '4', '4']
+        self.assert_equals_sorted(side_expected, side_sink.get_results())
+
+    def test_keyed_co_broadcast_side_output(self):
+        tag = OutputTag("side", Types.INT())
+
+        class MyKeyedBroadcastProcessFunction(KeyedBroadcastProcessFunction):
+
+            def __init__(self):
+                self.reducing_state = None  # type: ReducingState
+
+            def open(self, context: RuntimeContext):
+                self.reducing_state = context.get_reducing_state(
+                    ReducingStateDescriptor("reduce", lambda i, j: i+j, Types.INT())
+                )
+
+            def process_element(self, value, ctx):
+                self.reducing_state.add(value[1])
+                yield value[0]
+                yield tag, self.reducing_state.get()
+
+            def process_broadcast_element(self, value, ctx):
+                yield value[1]
+                yield tag, value[0]
+
+        self.env.set_parallelism(2)
+        ds = self.env.from_collection([('a', 0), ('b', 1), ('a', 2), ('b', 3)],
+                                      type_info=Types.ROW([Types.STRING(), Types.INT()]))
+        ds_broadcast = self.env.from_collection([(5, 'c'), (6, 'd')],
+                                                type_info=Types.ROW([Types.INT(), Types.STRING()]))
+        map_state_desc = MapStateDescriptor(
+            "dummy", key_type_info=Types.INT(), value_type_info=Types.STRING()
+        )
+        ds = ds.key_by(lambda e: e[0]).connect(ds_broadcast.broadcast(map_state_desc)).process(
+            MyKeyedBroadcastProcessFunction(), output_type=Types.STRING()
+        )
+        side_sink = DataStreamTestSinkFunction()
+        ds.get_side_output(tag).add_sink(side_sink)
+        ds.add_sink(self.test_sink)
+
+        self.env.execute("test_keyed_co_broadcast_process_side_output")
+        main_expected = ['a', 'a', 'b', 'b', 'c', 'c', 'd', 'd']
+        self.assert_equals_sorted(main_expected, self.test_sink.get_results())
+        side_expected = ['0', '1', '2', '4', '5', '5', '6', '6']
         self.assert_equals_sorted(side_expected, side_sink.get_results())
 
     def test_side_output_stream_execute_and_collect(self):
@@ -655,6 +756,28 @@ class DataStreamTests(object):
         result = [i for i in ds_side.execute_and_collect()]
         expected = [2, 4, 6]
         self.assert_equals_sorted(expected, result)
+
+    def test_side_output_tag_reusing(self):
+        tag = OutputTag("side", Types.INT())
+
+        class MyProcessFunction(ProcessFunction):
+
+            def process_element(self, value, ctx):
+                yield value
+                yield tag, value * 2
+
+        side1_sink = DataStreamTestSinkFunction()
+        ds = self.env.from_collection([1, 2, 3], Types.INT()).process(MyProcessFunction())
+        ds.get_side_output(tag).add_sink(side1_sink)
+
+        side2_sink = DataStreamTestSinkFunction()
+        ds.map(lambda i: i*2).process(MyProcessFunction()).get_side_output(tag).add_sink(side2_sink)
+
+        self.env.execute("test_side_output_tag_reusing")
+        result1 = [i for i in side1_sink.get_results(stringify=False)]
+        result2 = [i for i in side2_sink.get_results(stringify=False)]
+        self.assert_equals_sorted(['2', '4', '6'], result1)
+        self.assert_equals_sorted(['4', '8', '12'], result2)
 
 
 class DataStreamStreamingTests(DataStreamTests):
@@ -966,7 +1089,6 @@ class ProcessDataStreamTests(DataStreamTests):
     def test_process_function(self):
         self.env.set_parallelism(1)
         self.env.get_config().set_auto_watermark_interval(2000)
-        self.env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
         data_stream = self.env.from_collection([(1, '1603708211000'),
                                                 (2, '1603708224000'),
                                                 (3, '1603708226000'),
@@ -995,30 +1117,6 @@ class ProcessDataStreamTests(DataStreamTests):
                     "current timestamp: 1603708289000, "
                     "current_value: Row(f0=4, f1='1603708289000')"]
         self.assert_equals_sorted(expected, results)
-
-    def test_process_side_output(self):
-        tag = OutputTag("side", Types.INT())
-
-        ds = self.env.from_collection([('a', 0), ('b', 1), ('c', 2)],
-                                      type_info=Types.ROW([Types.STRING(), Types.INT()]))
-
-        class MyProcessFunction(ProcessFunction):
-
-            def process_element(self, value, ctx: 'ProcessFunction.Context'):
-                yield value[0]
-                yield tag, value[1]
-
-        ds2 = ds.process(MyProcessFunction(), output_type=Types.STRING())
-        main_sink = DataStreamTestSinkFunction()
-        ds2.add_sink(main_sink)
-        side_sink = DataStreamTestSinkFunction()
-        ds2.get_side_output(tag).add_sink(side_sink)
-
-        self.env.execute("test_process_side_output")
-        main_expected = ['a', 'b', 'c']
-        self.assert_equals_sorted(main_expected, main_sink.get_results())
-        side_expected = ['0', '1', '2']
-        self.assert_equals_sorted(side_expected, side_sink.get_results())
 
 
 class ProcessDataStreamStreamingTests(DataStreamStreamingTests, ProcessDataStreamTests,
@@ -1219,7 +1317,7 @@ class CommonDataStreamTests(PyFlinkTestCase):
         self.env.set_parallelism(2)
         self.env.set_runtime_mode(RuntimeExecutionMode.STREAMING)
         config = get_j_env_configuration(self.env._j_stream_execution_environment)
-        config.setString("akka.ask.timeout", "20 s")
+        config.setString("pekko.ask.timeout", "20 s")
         self.test_sink = DataStreamTestSinkFunction()
 
     def tearDown(self) -> None:
@@ -1446,20 +1544,28 @@ class CommonDataStreamTests(PyFlinkTestCase):
         test_data = ['pyflink', 'datastream', 'execute', 'collect']
         ds = self.env.from_collection(test_data)
 
+        # test collect with limit
         expected = test_data[:3]
         actual = []
         for result in ds.execute_and_collect(limit=3):
             actual.append(result)
         self.assertEqual(expected, actual)
 
-        expected = test_data
-        ds = self.env.from_collection(collection=test_data, type_info=Types.STRING())
-        with ds.execute_and_collect() as results:
+        # test collect KeyedStream
+        test_data = [('pyflink', 1), ('datastream', 2), ('pyflink', 1), ('collect', 2)]
+        expected = [Row(f0='pyflink', f1=('pyflink', 1)),
+                    Row(f0='datastream', f1=('datastream', 2)),
+                    Row(f0='pyflink', f1=('pyflink', 1)),
+                    Row(f0='collect', f1=('collect', 2))]
+        ds = self.env.from_collection(collection=test_data,
+                                      type_info=Types.TUPLE([Types.STRING(), Types.INT()]))
+        with ds.key_by(lambda i: i[0], Types.STRING()).execute_and_collect() as results:
             actual = []
             for result in results:
                 actual.append(result)
             self.assertEqual(expected, actual)
 
+        # test all kinds of data types
         test_data = [(1, None, 1, True, 32767, -2147483648, 1.23, 1.98932,
                       bytearray(b'flink'), 'pyflink',
                       datetime.date(2014, 9, 13),
@@ -1486,6 +1592,7 @@ class CommonDataStreamTests(PyFlinkTestCase):
             actual = [result for result in results]
             self.assert_equals_sorted(expected, actual)
 
+        # test primitive array
         test_data = [[1, 2, 3], [4, 5]]
         expected = test_data
         ds = self.env.from_collection(test_data, type_info=Types.PRIMITIVE_ARRAY(Types.INT()))
@@ -1498,6 +1605,7 @@ class CommonDataStreamTests(PyFlinkTestCase):
             ([None, ], [0.0, 0.0])
         ]
 
+        # test object array
         ds = self.env.from_collection(
             test_data,
             type_info=Types.TUPLE(

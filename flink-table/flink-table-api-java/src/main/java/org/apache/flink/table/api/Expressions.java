@@ -83,11 +83,13 @@ public final class Expressions {
      * }</pre>
      *
      * @see #col(String)
+     * @see #withAllColumns()
      */
     // CHECKSTYLE.OFF: MethodName
     public static ApiExpression $(String name) {
         return new ApiExpression(unresolvedRef(name));
     }
+
     // CHECKSTYLE.ON: MethodName
 
     /**
@@ -101,6 +103,8 @@ public final class Expressions {
      * <pre>{@code
      * tab.select(col("key"), col("value"))
      * }</pre>
+     *
+     * @see #withAllColumns()
      */
     public static ApiExpression col(String name) {
         return $(name);
@@ -209,30 +213,27 @@ public final class Expressions {
      * Use this constant for a time interval. Unbounded over windows start with the first row of a
      * partition.
      */
-    public static final ApiExpression UNBOUNDED_ROW =
-            apiCall(BuiltInFunctionDefinitions.UNBOUNDED_ROW);
+    public static final ApiExpression UNBOUNDED_ROW = lit(OverWindowRange.UNBOUNDED_ROW);
 
     /**
      * Offset constant to be used in the {@code preceding} clause of unbounded {@link Over} windows.
      * Use this constant for a row-count interval. Unbounded over windows start with the first row
      * of a partition.
      */
-    public static final ApiExpression UNBOUNDED_RANGE =
-            apiCall(BuiltInFunctionDefinitions.UNBOUNDED_RANGE);
+    public static final ApiExpression UNBOUNDED_RANGE = lit(OverWindowRange.UNBOUNDED_RANGE);
 
     /**
      * Offset constant to be used in the {@code following} clause of {@link Over} windows. Use this
      * for setting the upper bound of the window to the current row.
      */
-    public static final ApiExpression CURRENT_ROW = apiCall(BuiltInFunctionDefinitions.CURRENT_ROW);
+    public static final ApiExpression CURRENT_ROW = lit(OverWindowRange.CURRENT_ROW);
 
     /**
      * Offset constant to be used in the {@code following} clause of {@link Over} windows. Use this
      * for setting the upper bound of the window to the sort key of the current row, i.e., all rows
      * with the same sort key as the current row are included in the window.
      */
-    public static final ApiExpression CURRENT_RANGE =
-            apiCall(BuiltInFunctionDefinitions.CURRENT_RANGE);
+    public static final ApiExpression CURRENT_RANGE = lit(OverWindowRange.CURRENT_RANGE);
 
     /**
      * Returns the current SQL date in local time zone, the return type of this expression is {@link
@@ -363,6 +364,61 @@ public final class Expressions {
      */
     public static ApiExpression toTimestampLtz(Object numericEpochTime, Object precision) {
         return apiCall(BuiltInFunctionDefinitions.TO_TIMESTAMP_LTZ, numericEpochTime, precision);
+    }
+
+    /**
+     * Converts the given time string with the specified format to {@link
+     * DataTypes#TIMESTAMP_LTZ(int)}.
+     *
+     * @param timestampStr The timestamp string to convert.
+     * @param format The format of the string.
+     * @return The timestamp value with {@link DataTypes#TIMESTAMP_LTZ(int)} type.
+     */
+    public static ApiExpression toTimestampLtz(String timestampStr, String format) {
+        return apiCall(BuiltInFunctionDefinitions.TO_TIMESTAMP_LTZ, timestampStr, format);
+    }
+
+    /**
+     * Converts a timestamp to {@link DataTypes#TIMESTAMP_LTZ(int)}.
+     *
+     * <p>This method takes a string representing a timestamp and converts it to a TIMESTAMP_LTZ
+     * using the built-in TO_TIMESTAMP_LTZ function definition.
+     *
+     * @param timeStamp The timestamp string to be converted.
+     * @return The timestamp value with {@link DataTypes#TIMESTAMP_LTZ(int)} type.
+     */
+    public static ApiExpression toTimestampLtz(String timeStamp) {
+        return apiCall(BuiltInFunctionDefinitions.TO_TIMESTAMP_LTZ, timeStamp);
+    }
+
+    /**
+     * Converts a numeric type epoch time to {@link DataTypes#TIMESTAMP_LTZ(int)}.
+     *
+     * <p>This method takes an object representing an epoch time and converts it to a TIMESTAMP_LTZ
+     * using the built-in TO_TIMESTAMP_LTZ function definition.
+     *
+     * @param numericEpochTime The epoch time with numeric type.
+     * @return The timestamp value with {@link DataTypes#TIMESTAMP_LTZ(int)} type.
+     */
+    public static ApiExpression toTimestampLtz(Object numericEpochTime) {
+        return apiCall(BuiltInFunctionDefinitions.TO_TIMESTAMP_LTZ, numericEpochTime);
+    }
+
+    /**
+     * Converts a string timestamp with the custom format and timezone to {@link
+     * DataTypes#TIMESTAMP_LTZ(int)}.
+     *
+     * <p>The timestamp string will be parsed using the custom format and timezone, and converted to
+     * a TIMESTAMP_LTZ value.
+     *
+     * @param timestampStr The timestamp string to convert.
+     * @param format The format pattern to parse the timestamp string.
+     * @param timezone The timezone to use for the conversion.
+     * @return The timestamp value with {@link DataTypes#TIMESTAMP_LTZ(int)} type.
+     */
+    public static ApiExpression toTimestampLtz(
+            Object timestampStr, Object format, Object timezone) {
+        return apiCall(BuiltInFunctionDefinitions.TO_TIMESTAMP_LTZ, timestampStr, format, timezone);
     }
 
     /**
@@ -531,6 +587,26 @@ public final class Expressions {
      */
     public static ApiExpression map(Object key, Object value, Object... tail) {
         return apiCallAtLeastTwoArgument(BuiltInFunctionDefinitions.MAP, key, value, tail);
+    }
+
+    /**
+     * Creates a map from an array of keys and an array of values.
+     *
+     * <pre>{@code
+     * table.select(
+     *     mapFromArrays(
+     *         array("key1", "key2", "key3"),
+     *         array(1, 2, 3)
+     *     ))
+     * }</pre>
+     *
+     * <p>Note both arrays should have the same length.
+     */
+    public static ApiExpression mapFromArrays(Object key, Object value) {
+        return apiCall(
+                BuiltInFunctionDefinitions.MAP_FROM_ARRAYS,
+                objectToExpression(key),
+                objectToExpression(value));
     }
 
     /**
@@ -709,13 +785,33 @@ public final class Expressions {
     }
 
     /**
+     * Creates an expression that selects all columns. It can be used wherever an array of
+     * expression is accepted such as function calls, projections, or groupings.
+     *
+     * <p>This expression is a synonym of $("*"). It is semantically equal to {@code SELECT *} in
+     * SQL when used in a projection.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * tab.select(withAllColumns())
+     * }</pre>
+     *
+     * @see #withColumns(Object, Object...)
+     * @see #withoutColumns(Object, Object...)
+     */
+    public static ApiExpression withAllColumns() {
+        return $("*");
+    }
+
+    /**
      * Creates an expression that selects a range of columns. It can be used wherever an array of
      * expression is accepted such as function calls, projections, or groupings.
      *
      * <p>A range can either be index-based or name-based. Indices start at 1 and boundaries are
      * inclusive.
      *
-     * <p>e.g. withColumns(range("b", "c")) or withoutColumns($("*"))
+     * <p>e.g. withColumns(range("b", "c")) or withColumns($("*"))
      */
     public static ApiExpression withColumns(Object head, Object... tail) {
         return apiCallAtLeastOneArgument(BuiltInFunctionDefinitions.WITH_COLUMNS, head, tail);
@@ -905,6 +1001,126 @@ public final class Expressions {
         }
 
         return apiCall(functionDefinition, itemExpr);
+    }
+
+    /**
+     * A window function that provides access to a row that comes directly after the current row.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * table.window(Over.orderBy($("ts")).partitionBy("organisation").as("w"))
+     *    .select(
+     *       $("organisation"),
+     *       $("revenue"),
+     *       lag($("revenue")).over($("w").as("next_revenue")
+     *    )
+     * }</pre>
+     */
+    public static ApiExpression lead(Object value) {
+        return apiCall(BuiltInFunctionDefinitions.LEAD, value);
+    }
+
+    /**
+     * A window function that provides access to a row at a specified physical offset which comes
+     * after the current row.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * table.window(Over.orderBy($("ts")).partitionBy("organisation").as("w"))
+     *    .select(
+     *       $("organisation"),
+     *       $("revenue"),
+     *       lag($("revenue"), 1).over($("w").as("next_revenue")
+     *    )
+     * }</pre>
+     */
+    public static ApiExpression lead(Object value, Object offset) {
+        return apiCall(BuiltInFunctionDefinitions.LEAD, value, offset);
+    }
+
+    /**
+     * A window function that provides access to a row at a specified physical offset which comes
+     * after the current row.
+     *
+     * <p>The value to return when offset is beyond the scope of the partition. If a default value
+     * is not specified, NULL is returned. {@code default} must be type-compatible with {@code
+     * value}.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * table.window(Over.orderBy($("ts")).partitionBy("organisation").as("w"))
+     *    .select(
+     *       $("organisation"),
+     *       $("revenue"),
+     *       lag($("revenue"), 1, lit(0)).over($("w").as("next_revenue")
+     *    )
+     * }</pre>
+     */
+    public static ApiExpression lead(Object value, Object offset, Object defaultValue) {
+        return apiCall(BuiltInFunctionDefinitions.LEAD, value, offset, defaultValue);
+    }
+
+    /**
+     * A window function that provides access to a row that comes directly before the current row.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * table.window(Over.orderBy($("ts")).partitionBy("organisation").as("w"))
+     *    .select(
+     *       $("organisation"),
+     *       $("revenue"),
+     *       lag($("revenue")).over($("w").as("prev_revenue")
+     *    )
+     * }</pre>
+     */
+    public static ApiExpression lag(Object value) {
+        return apiCall(BuiltInFunctionDefinitions.LAG, value);
+    }
+
+    /**
+     * A window function that provides access to a row at a specified physical offset which comes
+     * before the current row.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * table.window(Over.orderBy($("ts")).partitionBy("organisation").as("w"))
+     *    .select(
+     *       $("organisation"),
+     *       $("revenue"),
+     *       lag($("revenue"), 1).over($("w").as("prev_revenue")
+     *    )
+     * }</pre>
+     */
+    public static ApiExpression lag(Object value, Object offset) {
+        return apiCall(BuiltInFunctionDefinitions.LAG, value, offset);
+    }
+
+    /**
+     * A window function that provides access to a row at a specified physical offset which comes
+     * before the current row.
+     *
+     * <p>The value to return when offset is beyond the scope of the partition. If a default value
+     * is not specified, NULL is returned. {@code default} must be type-compatible with {@code
+     * value}.
+     *
+     * <p>Example:
+     *
+     * <pre>{@code
+     * org.window(Over.orderBy($("ts")).partitionBy("organisation").as("w"))
+     *    .select(
+     *       $("organisation"),
+     *       $("revenue"),
+     *       lag($("revenue"), 1, lit(0)).over($("w").as("prev_revenue")
+     *    )
+     * }</pre>
+     */
+    public static ApiExpression lag(Object value, Object offset, Object defaultValue) {
+        return apiCall(BuiltInFunctionDefinitions.LAG, value, offset, defaultValue);
     }
 
     /**

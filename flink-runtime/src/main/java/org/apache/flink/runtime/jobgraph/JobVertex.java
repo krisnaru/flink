@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.jobgraph;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.operators.ResourceSpec;
 import org.apache.flink.configuration.Configuration;
@@ -155,7 +156,12 @@ public class JobVertex implements java.io.Serializable {
      */
     private boolean supportsConcurrentExecutionAttempts = true;
 
+    private boolean anyOutputBlocking = false;
+
     private boolean parallelismConfigured = false;
+
+    /** Indicates whether the parallelism of this job vertex is decided dynamically. */
+    private boolean dynamicParallelism = false;
 
     // --------------------------------------------------------------------------------------------
 
@@ -273,6 +279,15 @@ public class JobVertex implements java.io.Serializable {
         return parallelismConfigured;
     }
 
+    public void setDynamicParallelism(int parallelism) {
+        setParallelism(parallelism);
+        this.dynamicParallelism = true;
+    }
+
+    public boolean isDynamicParallelism() {
+        return parallelism == ExecutionConfig.PARALLELISM_DEFAULT || dynamicParallelism;
+    }
+
     /**
      * Returns the name of the invokable class which represents the task of this vertex.
      *
@@ -343,7 +358,7 @@ public class JobVertex implements java.io.Serializable {
      * Sets the maximum parallelism for the task.
      *
      * @param maxParallelism The maximum parallelism to be set. must be between 1 and
-     *     Short.MAX_VALUE.
+     *     Short.MAX_VALUE + 1.
      */
     public void setMaxParallelism(int maxParallelism) {
         this.maxParallelism = maxParallelism;
@@ -496,22 +511,29 @@ public class JobVertex implements java.io.Serializable {
     // --------------------------------------------------------------------------------------------
     public IntermediateDataSet getOrCreateResultDataSet(
             IntermediateDataSetID id, ResultPartitionType partitionType) {
+        anyOutputBlocking |= partitionType.isBlockingOrBlockingPersistentResultPartition();
         return this.results.computeIfAbsent(
                 id, key -> new IntermediateDataSet(id, partitionType, this));
     }
 
-    public JobEdge connectNewDataSetAsInput(
-            JobVertex input, DistributionPattern distPattern, ResultPartitionType partitionType) {
-        return connectNewDataSetAsInput(input, distPattern, partitionType, false);
-    }
-
+    @VisibleForTesting
     public JobEdge connectNewDataSetAsInput(
             JobVertex input,
             DistributionPattern distPattern,
             ResultPartitionType partitionType,
-            boolean isBroadcast) {
+            IntermediateDataSetID intermediateDataSetId,
+            boolean isBroadcast,
+            boolean isForward) {
         return connectNewDataSetAsInput(
-                input, distPattern, partitionType, new IntermediateDataSetID(), isBroadcast);
+                input,
+                distPattern,
+                partitionType,
+                intermediateDataSetId,
+                isBroadcast,
+                isForward,
+                -1,
+                distPattern != DistributionPattern.POINTWISE,
+                distPattern != DistributionPattern.POINTWISE && !isBroadcast);
     }
 
     public JobEdge connectNewDataSetAsInput(
@@ -519,12 +541,25 @@ public class JobVertex implements java.io.Serializable {
             DistributionPattern distPattern,
             ResultPartitionType partitionType,
             IntermediateDataSetID intermediateDataSetId,
-            boolean isBroadcast) {
+            boolean isBroadcast,
+            boolean isForward,
+            int typeNumber,
+            boolean interInputsKeysCorrelated,
+            boolean intraInputKeyCorrelated) {
 
         IntermediateDataSet dataSet =
                 input.getOrCreateResultDataSet(intermediateDataSetId, partitionType);
 
-        JobEdge edge = new JobEdge(dataSet, this, distPattern, isBroadcast);
+        JobEdge edge =
+                new JobEdge(
+                        dataSet,
+                        this,
+                        distPattern,
+                        isBroadcast,
+                        isForward,
+                        typeNumber,
+                        interInputsKeysCorrelated,
+                        intraInputKeyCorrelated);
         this.inputs.add(edge);
         dataSet.addConsumer(edge);
         return edge;
@@ -555,6 +590,10 @@ public class JobVertex implements java.io.Serializable {
 
     public boolean isSupportsConcurrentExecutionAttempts() {
         return supportsConcurrentExecutionAttempts;
+    }
+
+    public boolean isAnyOutputBlocking() {
+        return anyOutputBlocking;
     }
 
     // --------------------------------------------------------------------------------------------

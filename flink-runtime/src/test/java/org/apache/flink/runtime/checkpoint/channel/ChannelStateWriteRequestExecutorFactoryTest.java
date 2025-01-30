@@ -24,7 +24,11 @@ import org.apache.flink.runtime.state.storage.JobManagerCheckpointStorage;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.Random;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,7 +38,7 @@ public class ChannelStateWriteRequestExecutorFactoryTest {
     private static final CheckpointStorage CHECKPOINT_STORAGE = new JobManagerCheckpointStorage();
 
     @Test
-    void testReuseExecutorForSameJobId() {
+    void testReuseExecutorForSameJobId() throws IOException {
         assertReuseExecutor(1);
         assertReuseExecutor(2);
         assertReuseExecutor(3);
@@ -42,7 +46,7 @@ public class ChannelStateWriteRequestExecutorFactoryTest {
         assertReuseExecutor(10);
     }
 
-    private void assertReuseExecutor(int maxSubtasksPerChannelStateFile) {
+    private void assertReuseExecutor(int maxSubtasksPerChannelStateFile) throws IOException {
         JobID JOB_ID = new JobID();
         Random RANDOM = new Random();
         ChannelStateWriteRequestExecutorFactory executorFactory =
@@ -55,7 +59,7 @@ public class ChannelStateWriteRequestExecutorFactoryTest {
                     executorFactory.getOrCreateExecutor(
                             new JobVertexID(),
                             RANDOM.nextInt(numberOfTasks),
-                            CHECKPOINT_STORAGE,
+                            () -> CHECKPOINT_STORAGE.createCheckpointStorage(JOB_ID),
                             maxSubtasksPerChannelStateFile);
             if (i % maxSubtasksPerChannelStateFile == 0) {
                 assertThat(newExecutor)
@@ -68,5 +72,60 @@ public class ChannelStateWriteRequestExecutorFactoryTest {
                         .isSameAs(currentExecutor);
             }
         }
+    }
+
+    @Test
+    void testSomeSubtasksCloseDuringOtherSubtasksStarting() throws Exception {
+        JobID jobID = new JobID();
+        JobVertexID jobVertexID = new JobVertexID();
+        int numberOfSubtask = 100_000;
+        int maxSubtasksPerChannelStateFile = 10;
+
+        ChannelStateWriteRequestExecutorFactory executorFactory =
+                new ChannelStateWriteRequestExecutorFactory(jobID);
+
+        BlockingQueue<ChannelStateWriteRequestExecutor> queue = new LinkedBlockingQueue<>(100);
+
+        CompletableFuture<Void> createFuture = new CompletableFuture<>();
+        new Thread(
+                        () -> {
+                            try {
+                                for (int i = 0; i < numberOfSubtask; i++) {
+                                    ChannelStateWriteRequestExecutor executor =
+                                            executorFactory.getOrCreateExecutor(
+                                                    jobVertexID,
+                                                    i,
+                                                    () ->
+                                                            CHECKPOINT_STORAGE
+                                                                    .createCheckpointStorage(jobID),
+                                                    maxSubtasksPerChannelStateFile,
+                                                    false);
+                                    assertThat(executor).isNotNull();
+                                    queue.put(executor);
+                                }
+                                createFuture.complete(null);
+                            } catch (Throwable e) {
+                                createFuture.completeExceptionally(e);
+                            }
+                        })
+                .start();
+
+        CompletableFuture<Void> releaseFuture = new CompletableFuture<>();
+        new Thread(
+                        () -> {
+                            try {
+                                for (int i = 0; i < numberOfSubtask; i++) {
+                                    ChannelStateWriteRequestExecutor executor = queue.take();
+                                    executor.releaseSubtask(jobVertexID, numberOfSubtask);
+                                }
+                                releaseFuture.complete(null);
+                            } catch (Throwable e) {
+                                releaseFuture.completeExceptionally(e);
+                            }
+                        })
+                .start();
+
+        createFuture.get();
+        releaseFuture.get();
     }
 }

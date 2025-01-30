@@ -386,7 +386,7 @@ GroupAggregate(..., changelogMode=[I,UA,D])
 SET 'table.exec.mini-batch.enabled' = 'true';
 SET 'table.exec.mini-batch.allow-latency' = '5s';
 SET 'table.exec.mini-batch.size' = '200';
-SET 'table.optimizer.agg-phase-strategy' = 'OHE_PHASE';
+SET 'table.optimizer.agg-phase-strategy' = 'ONE_PHASE';
 
 CREATE TABLE MyTable (
   a BIGINT,
@@ -526,7 +526,7 @@ No available advice...
 EXPLAIN [([ExplainDetail[, ExplainDetail]*]) | PLAN FOR] <query_statement_or_insert_statement_or_statement_set>
 
 statement_set:
-EXECUTE STATEMENT SET
+STATEMENT SET
 BEGIN
 insert_statement;
 ...

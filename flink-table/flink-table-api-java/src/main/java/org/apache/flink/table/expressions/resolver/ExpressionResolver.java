@@ -367,7 +367,7 @@ public class ExpressionResolver {
                 overWindow.getAlias(),
                 prepareExpressions(overWindow.getPartitioning()),
                 resolveFieldsInSingleExpression(overWindow.getOrder()),
-                resolveFieldsInSingleExpression(overWindow.getPreceding()),
+                overWindow.getPreceding().map(this::resolveFieldsInSingleExpression).orElse(null),
                 overWindow.getFollowing().map(this::resolveFieldsInSingleExpression).orElse(null));
     }
 
@@ -378,6 +378,7 @@ public class ExpressionResolver {
      * <p>Note: Further resolution or validation will not happen anymore, therefore the created
      * expressions must be valid.
      */
+    @Internal
     public class PostResolverFactory {
 
         public CallExpression as(ResolvedExpression expression, String alias) {
@@ -434,6 +435,7 @@ public class ExpressionResolver {
     }
 
     /** Builder for creating {@link ExpressionResolver}. */
+    @Internal
     public static class ExpressionResolverBuilder {
 
         private final TableConfig tableConfig;

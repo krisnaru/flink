@@ -50,6 +50,18 @@ TEST_INFRA_DIR=`pwd -P`
 cd $TEST_ROOT
 
 source "${TEST_INFRA_DIR}/common_utils.sh"
+source "${FLINK_DIR}/bin/bash-java-utils.sh"
+
+if [[ -z "${FLINK_CONF_DIR:-}" ]]; then
+    FLINK_CONF_DIR="$FLINK_DIR/conf"
+fi
+FLINK_CONF=${FLINK_CONF_DIR}/config.yaml
+setJavaRun "$FLINK_CONF"
+
+# Flatten the configuration file config.yaml to enable end-to-end test cases which will modify 
+# it directly through shell scripts.
+output=$(updateAndGetFlinkConfiguration "${FLINK_CONF_DIR}" "${FLINK_DIR}/bin" "${FLINK_DIR}/lib" -flatten)
+echo "$output" > $FLINK_CONF
 
 NODENAME=${NODENAME:-"localhost"}
 
@@ -143,14 +155,14 @@ function swap_planner_scala_with_planner_loader() {
 
 function delete_config_key() {
     local config_key=$1
-    sed -i -e "/^${config_key}: /d" ${FLINK_DIR}/conf/flink-conf.yaml
+    sed -i -e "/^${config_key}: /d" $FLINK_CONF
 }
 
 function set_config_key() {
     local config_key=$1
     local value=$2
     delete_config_key ${config_key}
-    echo "$config_key: $value" >> $FLINK_DIR/conf/flink-conf.yaml
+    echo "$config_key: $value" >> $FLINK_CONF
 }
 
 function create_ha_config() {
@@ -166,37 +178,35 @@ function create_ha_config() {
     # This must have all the masters to be used in HA.
     echo "localhost:8081" > ${FLINK_DIR}/conf/masters
 
-    # then move on to create the flink-conf.yaml
-    sed 's/^    //g' > ${FLINK_DIR}/conf/flink-conf.yaml << EOL
+    # then move on to create the config.yaml
     #==============================================================================
     # Common
     #==============================================================================
 
-    jobmanager.rpc.address: localhost
-    jobmanager.rpc.port: 6123
-    jobmanager.memory.process.size: 1024m
-    taskmanager.memory.process.size: 1024m
-    taskmanager.numberOfTaskSlots: ${TASK_SLOTS_PER_TM_HA}
+    set_config_key "jobmanager.rpc.address" "localhost"
+    set_config_key "jobmanager.rpc.port" "6123"
+    set_config_key "jobmanager.memory.process.size" "1024m"
+    set_config_key "taskmanager.memory.process.size" "1024m"
+    set_config_key "taskmanager.numberOfTaskSlots" "${TASK_SLOTS_PER_TM_HA}"
 
     #==============================================================================
     # High Availability
     #==============================================================================
 
-    high-availability.type: zookeeper
-    high-availability.zookeeper.storageDir: file://${TEST_DATA_DIR}/recovery/
-    high-availability.zookeeper.quorum: localhost:2181
-    high-availability.zookeeper.path.root: /flink
-    high-availability.cluster-id: /test_cluster_one
+    set_config_key "high-availability.type" "zookeeper"
+    set_config_key "high-availability.zookeeper.storageDir" "file://${TEST_DATA_DIR}/recovery/"
+    set_config_key "high-availability.zookeeper.quorum" "localhost:2181"
+    set_config_key "high-availability.zookeeper.path.root" "/flink"
+    set_config_key "high-availability.cluster-id" "/test_cluster_one"
 
     #==============================================================================
     # Web Frontend
     #==============================================================================
 
-    rest.port: 8081
+    set_config_key "rest.port" "8081"
 
-    queryable-state.server.ports: 9000-9009
-    queryable-state.proxy.ports: 9010-9019
-EOL
+    set_config_key "queryable-state.server.ports" "9000-9009"
+    set_config_key "queryable-state.proxy.ports" "9010-9019"
 }
 
 function get_node_ip {
@@ -283,11 +293,11 @@ function wait_rest_endpoint_up {
   exit 1
 }
 
-function relocate_rocksdb_logs {
-  # After FLINK-24785, RocksDB's log would be created under Flink's log directory by default,
-  # this would make e2e tests' artifacts containing too many log files.
-  # As RocksDB's log would not help much in e2e tests, move the location back to its own folder.
-  set_config_key "state.backend.rocksdb.log.dir" "/dev/null"
+function reset_rocksdb_log_level {
+  # After upgrading RocksDB to 8.10 in FLINK-35573, the log dir of RocksDB cannot be set to/dev/null.
+  # To avoid the problem of large logs, we can set the log level of rocksdb to HEADER_LOG in e2e test,
+  # and then continue to keep it under tm's log dir
+  set_config_key "state.backend.rocksdb.log.level" "HEADER_LEVEL"
 }
 
 function wait_dispatcher_running {
@@ -296,9 +306,23 @@ function wait_dispatcher_running {
 }
 
 function start_cluster {
-  relocate_rocksdb_logs
+  reset_rocksdb_log_level
   "$FLINK_DIR"/bin/start-cluster.sh
   wait_dispatcher_running
+}
+
+function wait_sql_gateway_running {
+  local query_url="${REST_PROTOCOL}://${NODENAME}:8083/info"
+  wait_rest_endpoint_up "${query_url}" "SqlGateway" "Apache Flink"
+}
+
+function start_sql_gateway() {
+  "$FLINK_DIR"/bin/sql-gateway.sh start
+  wait_sql_gateway_running
+}
+
+function stop_sql_gateway() {
+  "$FLINK_DIR"/bin/sql-gateway.sh stop
 }
 
 function start_taskmanagers {
@@ -355,33 +379,60 @@ function wait_for_number_of_running_tms {
 }
 
 function check_logs_for_errors {
+  internal_check_logs_for_errors
+}
+
+# check logs for errors, the arguments are the additional allowed errors
+function internal_check_logs_for_errors {
   echo "Checking for errors..."
-  error_count=$(grep -rv "GroupCoordinatorNotAvailableException" $FLINK_LOG_DIR \
-      | grep -v "RetriableCommitFailedException" \
-      | grep -v "NoAvailableBrokersException" \
-      | grep -v "Async Kafka commit failed" \
-      | grep -v "DisconnectException" \
-      | grep -v "Cannot connect to ResourceManager right now" \
-      | grep -v "AskTimeoutException" \
-      | grep -v "Error while loading kafka-version.properties" \
-      | grep -v "WARN  akka.remote.transport.netty.NettyTransport" \
-      | grep -v "WARN  org.jboss.netty.channel.DefaultChannelPipeline" \
-      | grep -v "jvm-exit-on-fatal-error" \
-      | grep -v 'INFO.*AWSErrorCode' \
-      | grep -v "RejectedExecutionException" \
-      | grep -v "An exception was thrown by an exception handler" \
-      | grep -v "java.lang.NoClassDefFoundError: org/apache/hadoop/yarn/exceptions/YarnException" \
-      | grep -v "java.lang.NoClassDefFoundError: org/apache/hadoop/conf/Configuration" \
-      | grep -v "org.apache.commons.beanutils.FluentPropertyBeanIntrospector.*Error when creating PropertyDescriptor.*org.apache.commons.configuration2.AbstractConfiguration.setProperty(java.lang.String,java.lang.Object)! Ignoring this property." \
-      | grep -v "Error while loading kafka-version.properties :null" \
-      | grep -v "[Terror] modules" \
-      | grep -v "HeapDumpOnOutOfMemoryError" \
-      | grep -v "error_prone_annotations" \
-      | grep -v "Error sending fetch request" \
-      | grep -v "WARN  akka.remote.ReliableDeliverySupervisor" \
-      | grep -v "Options.*error_*" \
-      | grep -v "not packaged with this application" \
-      | grep -ic "error" || true)
+
+  local additional_allowed_errors=()
+  local index=0
+  for error in "$@"; do
+    additional_allowed_errors[index]="$error"
+    index=$index+1
+  done
+
+  local default_allowed_errors=("GroupCoordinatorNotAvailableException" \
+  "RetriableCommitFailedException" \
+  "NoAvailableBrokersException" \
+  "Async Kafka commit failed" \
+  "DisconnectException" \
+  "Cannot connect to ResourceManager right now" \
+  "AskTimeoutException" \
+  "Error while loading kafka-version.properties" \
+  "WARN  org.apache.pekko.remote.transport.netty.NettyTransport" \
+  "WARN  org.jboss.netty.channel.DefaultChannelPipeline" \
+  "jvm-exit-on-fatal-error" \
+  'INFO.*AWSErrorCode' \
+  "RejectedExecutionException" \
+  "An exception was thrown by an exception handler" \
+  "java.lang.NoClassDefFoundError: org/apache/hadoop/yarn/exceptions/YarnException" \
+  "java.lang.NoClassDefFoundError: org/apache/hadoop/conf/Configuration" \
+  "org.apache.commons.beanutils.FluentPropertyBeanIntrospector.*Error when creating PropertyDescriptor.*org.apache.commons.configuration2.AbstractConfiguration.setProperty(java.lang.String,java.lang.Object)! Ignoring this property." \
+  "Error while loading kafka-version.properties :null" \
+  "[Terror] modules" \
+  "HeapDumpOnOutOfMemoryError" \
+  "error_prone_annotations" \
+  "Error sending fetch request" \
+  "WARN  org.apache.pekko.remote.ReliableDeliverySupervisor" \
+  "Options.*error_*" \
+  "not packaged with this application")
+
+  local all_allowed_errors=("${default_allowed_errors[@]}" "${additional_allowed_errors[@]}")
+
+  # generate the grep command
+  local grep_command=""
+  for error in "${all_allowed_errors[@]}"; do
+    if [[ $grep_command == "" ]]; then
+      grep_command="grep -rv \"$error\" $FLINK_LOG_DIR"
+    else
+      grep_command="$grep_command | grep -v \"$error\""
+    fi
+  done
+  grep_command="$grep_command | grep -ic \"error\" || true"
+
+  error_count=$(eval "$grep_command")
   if [[ ${error_count} -gt 0 ]]; then
     echo "Found error in log files; printing first 500 lines; see full logs for details:"
     find $FLINK_LOG_DIR/ -type f -exec head -n 500 {} \;
@@ -410,7 +461,7 @@ function internal_check_logs_for_exceptions {
   "DisconnectException" \
   "Cannot connect to ResourceManager right now" \
   "AskTimeoutException" \
-  "WARN  akka.remote.transport.netty.NettyTransport" \
+  "WARN  org.apache.pekko.remote.transport.netty.NettyTransport" \
   "WARN  org.jboss.netty.channel.DefaultChannelPipeline" \
   'INFO.*AWSErrorCode' \
   "RejectedExecutionException" \
@@ -426,7 +477,7 @@ function internal_check_logs_for_exceptions {
   "java.lang.Exception: Artificial failure" \
   "org.apache.flink.runtime.checkpoint.CheckpointException" \
   "org.apache.flink.runtime.JobException: Recovery is suppressed" \
-  "WARN  akka.remote.ReliableDeliverySupervisor" \
+  "WARN  org.apache.pekko.remote.ReliableDeliverySupervisor" \
   "RecipientUnreachableException" \
   "completeExceptionally" \
   "SerializedCheckpointException.unwrap")
@@ -482,10 +533,12 @@ function check_logs_for_non_empty_out_files {
 
 function shutdown_all {
   stop_cluster
+  stop_sql_gateway
   # stop TMs which started by command: bin/taskmanager.sh start
   "$FLINK_DIR"/bin/taskmanager.sh stop-all
   tm_kill_all
   jm_kill_all
+  gw_kill_all
 }
 
 function stop_cluster {
@@ -632,6 +685,10 @@ function tm_kill_all {
   kill_all 'TaskManagerRunner|TaskManager'
 }
 
+function gw_kill_all {
+  kill_all 'SqlGateway'
+}
+
 # Kills all processes that match the given name.
 function kill_all {
   local pid=`jps | grep -E "${1}" | cut -d " " -f 1 || true`
@@ -649,7 +706,14 @@ function setup_flink_slf4j_metric_reporter() {
   METRIC_NAME_PATTERN="${1:-"*"}"
   set_config_key "metrics.reporter.slf4j.factory.class" "org.apache.flink.metrics.slf4j.Slf4jReporterFactory"
   set_config_key "metrics.reporter.slf4j.interval" "1 SECONDS"
-  set_config_key "metrics.reporter.slf4j.filter.includes" "*:${METRIC_NAME_PATTERN}"
+  set_config_key "metrics.reporter.slf4j.filter.includes" "'*:${METRIC_NAME_PATTERN}'"
+}
+
+function get_job_exceptions {
+  local job_id=$1
+  local json=$(curl ${CURL_SSL_ARGS} -s ${REST_PROTOCOL}://${NODENAME}:8081/jobs/${job_id}/exceptions)
+
+  echo ${json}
 }
 
 function get_job_metric {
@@ -684,9 +748,9 @@ function get_num_metric_samples {
 
 function wait_oper_metric_num_in_records {
     OPERATOR=$1
-    MAX_NUM_METRICS="${2:-200}"
+    MAX_NUM_RECORDS="${2:-200}"
     JOB_NAME="${3:-General purpose test job}"
-    NUM_METRICS=$(get_num_metric_samples ${OPERATOR} '${JOB_NAME}')
+    NUM_METRICS=$(get_num_metric_samples ${OPERATOR} "${JOB_NAME}")
     OLD_NUM_METRICS=${4:-${NUM_METRICS}}
     local timeout="${5:-600}"
     local i=0
@@ -701,12 +765,12 @@ function wait_oper_metric_num_in_records {
         NUM_RECORDS=0
       fi
 
-      if (( $NUM_RECORDS < $MAX_NUM_METRICS )); then
-        echo "Waiting for job to process up to ${MAX_NUM_METRICS} records, current progress: ${NUM_RECORDS} records ..."
+      if (( $NUM_RECORDS < $MAX_NUM_RECORDS )); then
+        echo "Waiting for job to process up to ${MAX_NUM_RECORDS} records, current progress: ${NUM_RECORDS} records ..."
         sleep 1
         ((i++))
         if ((i > timeout)); then
-            echo "A timeout occurred waiting for job to process up to ${MAX_NUM_METRICS} records"
+            echo "A timeout occurred waiting for job to process up to ${MAX_NUM_RECORDS} records"
             exit 1
         fi
       else
@@ -820,7 +884,7 @@ function wait_for_restart_to_complete {
     while [[ ${current_num_restarts} -lt ${expected_num_restarts} ]]; do
         echo "Still waiting for restarts. Expected: $expected_num_restarts Current: $current_num_restarts"
         sleep 5
-        current_num_restarts=$(get_job_metric ${jobid} "fullRestarts")
+        current_num_restarts=$(get_job_metric ${jobid} "numRestarts")
         if [[ -z ${current_num_restarts} ]]; then
             current_num_restarts=${base_num_restarts}
         fi
@@ -896,8 +960,12 @@ function extract_job_id_from_job_submission_return() {
 
 kill_test_watchdog() {
     local watchdog_pid=$(cat $TEST_DATA_DIR/job_watchdog.pid)
-    echo "Stopping job timeout watchdog (with pid=$watchdog_pid)"
-    kill $watchdog_pid
+    if kill -0 $watchdog_pid > /dev/null 2>&1; then
+        echo "Stopping job timeout watchdog (with pid=$watchdog_pid)"
+        kill $watchdog_pid
+    else
+        echo "No watchdog process with pid=$watchdog_pid present, anymore. No action required to clean the watchdog process up."
+    fi
 }
 
 #

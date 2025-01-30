@@ -25,6 +25,8 @@ import org.apache.flink.runtime.scheduler.ExecutionGraphHandler;
 import org.apache.flink.runtime.scheduler.OperatorCoordinatorHandler;
 import org.apache.flink.runtime.scheduler.exceptionhistory.ExceptionHistoryEntry;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -58,7 +60,7 @@ public interface StateTransitions {
     interface ToCreatingExecutionGraph extends StateTransitions {
 
         /** Transitions into the {@link CreatingExecutionGraph} state. */
-        void goToCreatingExecutionGraph();
+        void goToCreatingExecutionGraph(@Nullable ExecutionGraph previousExecutionGraph);
     }
 
     /** Interface covering transition to the {@link Executing} state. */
@@ -126,6 +128,9 @@ public interface StateTransitions {
          *     Restarting} state
          * @param backoffTime backoffTime to wait before transitioning to the {@link Restarting}
          *     state
+         * @param forcedRestart if the {@link WaitingForResources} state should be omitted and the
+         *     {@link CreatingExecutionGraph} state should be entered directly from the {@link
+         *     Restarting} state
          * @param failureCollection collection of failures that are propagated
          */
         void goToRestarting(
@@ -133,6 +138,7 @@ public interface StateTransitions {
                 ExecutionGraphHandler executionGraphHandler,
                 OperatorCoordinatorHandler operatorCoordinatorHandler,
                 Duration backoffTime,
+                boolean forcedRestart,
                 List<ExceptionHistoryEntry> failureCollection);
     }
 
@@ -164,6 +170,6 @@ public interface StateTransitions {
     interface ToWaitingForResources extends StateTransitions {
 
         /** Transitions into the {@link WaitingForResources} state. */
-        void goToWaitingForResources();
+        void goToWaitingForResources(@Nullable ExecutionGraph previousExecutionGraph);
     }
 }

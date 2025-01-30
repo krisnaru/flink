@@ -18,28 +18,33 @@
 
 package org.apache.flink.table.catalog.hive;
 
+import org.apache.flink.api.common.serialization.SerializerConfigImpl;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.BatchExecutionOptions;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.MemorySize;
-import org.apache.flink.sql.parser.SqlPartitionUtils;
-import org.apache.flink.sql.parser.hive.ddl.SqlAddHivePartitions;
-import org.apache.flink.sql.parser.hive.impl.FlinkHiveSqlParserImpl;
+import org.apache.flink.connectors.hive.HiveOptions;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.SqlDialect;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.internal.TableEnvironmentInternal;
 import org.apache.flink.table.catalog.CatalogTest;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.catalog.hive.client.HiveShimLoader;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.delegation.Parser;
+import org.apache.flink.table.operations.ddl.AddPartitionsOperation;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.utils.PartitionPathUtils;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
-import org.apache.calcite.config.Lex;
-import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
@@ -47,6 +52,7 @@ import org.apache.hadoop.hive.metastore.api.Table;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -59,6 +65,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
+import static org.apache.flink.connectors.hive.HiveOptions.TABLE_EXEC_HIVE_INFER_SOURCE_PARALLELISM_MODE;
 import static org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM;
 
 /** Test utils for Hive connector. */
@@ -158,6 +165,8 @@ public class HiveTestUtils {
     public static TableEnvironment createTableEnvInBatchMode(SqlDialect dialect) {
         TableEnvironment tableEnv = TableEnvironment.create(EnvironmentSettings.inBatchMode());
         tableEnv.getConfig().set(TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tableEnv.getConfig()
+                .set(TABLE_EXEC_HIVE_INFER_SOURCE_PARALLELISM_MODE, HiveOptions.InferMode.STATIC);
         tableEnv.getConfig().setSqlDialect(dialect);
         return tableEnv;
     }
@@ -202,6 +211,18 @@ public class HiveTestUtils {
     public static TextTableInserter createTextTableInserter(
             HiveCatalog hiveCatalog, String dbName, String tableName) {
         return new TextTableInserter(hiveCatalog, dbName, tableName);
+    }
+
+    public static byte[] serialize(TypeInformation<RowData> typeInfo, RowData row) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            typeInfo.createSerializer(new SerializerConfigImpl())
+                    .serialize(row, new DataOutputViewStreamWrapper(baos));
+        } catch (IOException e) {
+            // throw as RuntimeException so the function can use in lambda
+            throw new RuntimeException(e);
+        }
+        return baos.toByteArray();
     }
 
     /** insert table operation. */
@@ -253,16 +274,15 @@ public class HiveTestUtils {
                         String.format(
                                 "alter table `%s`.`%s` add if not exists partition (%s)",
                                 dbName, tableName, partitionSpec);
-                // we need parser to parse the partition spec
-                SqlParser parser =
-                        SqlParser.create(
-                                addPartDDL,
-                                SqlParser.config()
-                                        .withParserFactory(FlinkHiveSqlParserImpl.FACTORY)
-                                        .withLex(Lex.JAVA));
-                SqlAddHivePartitions sqlAddPart = (SqlAddHivePartitions) parser.parseStmt();
+                Parser parser = ((TableEnvironmentInternal) tableEnv).getParser();
+                AddPartitionsOperation addPartitionsOperation =
+                        (AddPartitionsOperation) parser.parse(addPartDDL).get(0);
                 LinkedHashMap<String, String> spec =
-                        SqlPartitionUtils.getPartitionKVs(sqlAddPart.getPartSpecs().get(0));
+                        new LinkedHashMap<>(
+                                addPartitionsOperation
+                                        .getPartitionSpecs()
+                                        .get(0)
+                                        .getPartitionSpec());
                 Path partLocation =
                         new Path(
                                 hiveTable.getSd().getLocation(),
@@ -327,5 +347,10 @@ public class HiveTestUtils {
             }
             return builder.toString();
         }
+    }
+
+    /** Derive the dataType from the {@link Schema.UnresolvedColumn}. */
+    public static DataType getType(Schema.UnresolvedColumn column) {
+        return (DataType) ((Schema.UnresolvedPhysicalColumn) column).getDataType();
     }
 }

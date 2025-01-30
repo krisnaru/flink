@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.operators.hash;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypePairComparator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -757,7 +758,9 @@ public class CompactingHashTable<T> extends AbstractMutableHashTable<T> {
         return Math.max(10, Math.min(numBuffers / 10, MAX_NUM_PARTITIONS));
     }
 
-    /** @return String containing a summary of the memory consumption for error messages */
+    /**
+     * @return String containing a summary of the memory consumption for error messages
+     */
     private String getMemoryConsumptionString() {
         return "numPartitions: "
                 + this.partitions.size()
@@ -806,7 +809,9 @@ public class CompactingHashTable<T> extends AbstractMutableHashTable<T> {
         return numSegments * this.segmentSize;
     }
 
-    /** @return number of memory segments in the largest partition */
+    /**
+     * @return number of memory segments in the largest partition
+     */
     private int getMaxPartition() {
         int maxPartition = 0;
         for (InMemoryPartition<T> p1 : this.partitions) {
@@ -817,7 +822,9 @@ public class CompactingHashTable<T> extends AbstractMutableHashTable<T> {
         return maxPartition;
     }
 
-    /** @return number of memory segments in the smallest partition */
+    /**
+     * @return number of memory segments in the smallest partition
+     */
     private int getMinPartition() {
         int minPartition = Integer.MAX_VALUE;
         for (InMemoryPartition<T> p1 : this.partitions) {
@@ -828,7 +835,9 @@ public class CompactingHashTable<T> extends AbstractMutableHashTable<T> {
         return minPartition;
     }
 
-    /** @return number of memory segments used in overflow buckets */
+    /**
+     * @return number of memory segments used in overflow buckets
+     */
     private int getOverflowSegmentCount() {
         int result = 0;
         for (InMemoryPartition<T> p : this.partitions) {
@@ -870,7 +879,8 @@ public class CompactingHashTable<T> extends AbstractMutableHashTable<T> {
      * @return true on success
      * @throws IOException
      */
-    private boolean resizeHashTable() throws IOException {
+    @VisibleForTesting
+    boolean resizeHashTable() throws IOException {
         final int newNumBuckets = 2 * this.numBuckets;
         final int bucketsPerSegment = this.bucketsPerSegmentMask + 1;
         final int newNumSegments = (newNumBuckets + (bucketsPerSegment - 1)) / bucketsPerSegment;
@@ -1103,6 +1113,13 @@ public class CompactingHashTable<T> extends AbstractMutableHashTable<T> {
             }
             this.isResizing = false;
             return true;
+        }
+    }
+
+    @VisibleForTesting
+    void compactPartitions() throws IOException {
+        for (int x = 0; x < partitions.size(); x++) {
+            compactPartition(x);
         }
     }
 

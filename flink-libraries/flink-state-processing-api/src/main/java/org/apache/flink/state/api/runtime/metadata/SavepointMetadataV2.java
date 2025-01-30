@@ -25,12 +25,12 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.state.api.OperatorIdentifier;
 import org.apache.flink.state.api.StateBootstrapTransformation;
 import org.apache.flink.state.api.runtime.StateBootstrapTransformationWithID;
+import org.apache.flink.util.CollectionUtil;
 import org.apache.flink.util.Preconditions;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -61,7 +61,7 @@ public class SavepointMetadataV2 {
 
         this.maxParallelism = maxParallelism;
         this.masterStates = new ArrayList<>(masterStates);
-        this.operatorStateIndex = new HashMap<>(initialStates.size());
+        this.operatorStateIndex = CollectionUtil.newHashMapWithExpectedSize(initialStates.size());
 
         initialStates.forEach(
                 existingState ->
@@ -119,10 +119,12 @@ public class SavepointMetadataV2 {
         operatorStateIndex.put(
                 id,
                 OperatorStateSpecV2.newWithTransformation(
-                        new StateBootstrapTransformationWithID<>(id, transformation)));
+                        new StateBootstrapTransformationWithID<>(identifier, transformation)));
     }
 
-    /** @return List of {@link OperatorState} that already exists within the savepoint. */
+    /**
+     * @return List of {@link OperatorState} that already exists within the savepoint.
+     */
     public List<OperatorState> getExistingOperators() {
         return operatorStateIndex.values().stream()
                 .filter(OperatorStateSpecV2::isExistingState)
